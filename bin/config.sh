@@ -9,7 +9,7 @@
 # All values can also be set as environment variables before sourcing.
 # =============================================================================
 
-_K8_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 if [[ -f "${INFRA_ROOT:-.}/config.env" ]]; then
   source "${INFRA_ROOT:-.}/config.env"

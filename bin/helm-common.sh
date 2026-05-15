@@ -90,7 +90,7 @@ _get_env_namespace() {
 #
 # Format: YAML list of tiers, each with a charts[] array.
 # =============================================================================
-_K8_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 _TIERS_FILE=""
 if [[ -f "${INFRA_ROOT:-}/tiers.yaml" ]]; then
   _TIERS_FILE="${INFRA_ROOT}/tiers.yaml"
