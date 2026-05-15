@@ -16,7 +16,7 @@ fail()  { echo -e "  ${FAIL} $1"; }
 info()  { echo -e "  ${INFO} $1"; }
 die()   { echo -e "\n${FAIL} $1\n"; exit 1; }
 
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="${INFRA_ROOT:-$(pwd)}"
 
 PROFILE="${K8_AWS_PROFILE}"
 EXPECTED_ACCOUNT="${K8_AWS_ACCOUNT_ID}"
