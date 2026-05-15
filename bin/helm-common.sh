@@ -102,7 +102,7 @@ TIERS=()
 if [[ -n "$_TIERS_FILE" ]] && command -v yq &>/dev/null; then
   _tier_count=$(yq '.tiers | length' "$_TIERS_FILE" 2>/dev/null || echo 0)
   for (( _t=0; _t < _tier_count; _t++ )); do
-    _charts=$(yq -r ".tiers[$_t].charts // [] | .[] // empty" "$_TIERS_FILE" 2>/dev/null | tr '\n' ' ')
+    _charts=$(yq -r ".tiers[$_t].charts[]" "$_TIERS_FILE" 2>/dev/null | tr '\n' ' ')
     _charts="${_charts% }"
     [[ -n "$_charts" ]] && TIERS+=("$_charts")
   done
