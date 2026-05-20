@@ -8,6 +8,39 @@
 HELM_DIR="$INFRA_ROOT/helm"
 
 # =============================================================================
+# Chart path resolver — supports categorical subdirectories
+#
+# Charts may live at:
+#   helm/<chart>/Chart.yaml              (flat — legacy)
+#   helm/<category>/<chart>/Chart.yaml   (categorical — new layout)
+#
+# _resolve_chart_dir builds an associative array mapping chart name → directory.
+# All downstream code uses _CHART_DIRS[chart] instead of $HELM_DIR/$chart.
+# =============================================================================
+declare -A _CHART_DIRS=()
+
+_build_chart_index() {
+  _CHART_DIRS=()
+  local chart_yaml
+  while IFS= read -r chart_yaml; do
+    local dir name
+    dir="$(dirname "$chart_yaml")"
+    name="$(basename "$dir")"
+    _CHART_DIRS["$name"]="$dir"
+  done < <(find "$HELM_DIR" -maxdepth 3 -name Chart.yaml -not -path "*/charts/*" 2>/dev/null)
+}
+_build_chart_index
+
+_chart_dir() {
+  local chart="$1"
+  if [[ -n "${_CHART_DIRS[$chart]+x}" ]]; then
+    echo "${_CHART_DIRS[$chart]}"
+  else
+    echo "$HELM_DIR/$chart"
+  fi
+}
+
+# =============================================================================
 # Environment overlay (--env stage, --env production, etc.)
 #
 # When --env is set to a non-production value (e.g. "stage"), these helpers
@@ -38,7 +71,7 @@ _get_release_name() {
 # This avoids word-splitting issues that occur when returning -f flags as a string.
 _get_values_files() {
   local chart="$1"
-  local chart_dir="$HELM_DIR/$chart"
+  local chart_dir="$(_chart_dir "$chart")"
   if [[ -n "$ENV_NAME" && "$ENV_NAME" != "production" ]]; then
     local overlay="$chart_dir/values-${ENV_NAME}.yaml"
     if [[ -f "$overlay" ]]; then
@@ -57,7 +90,7 @@ _has_env_overlay() {
   if [[ -z "$ENV_NAME" || "$ENV_NAME" == "production" ]]; then
     return 0
   fi
-  [[ -f "$HELM_DIR/$chart/values-${ENV_NAME}.yaml" ]]
+  [[ -f "$(_chart_dir "$chart")/values-${ENV_NAME}.yaml" ]]
 }
 
 # Resolves the target namespace for a chart+env combination. For non-production
@@ -67,7 +100,7 @@ _has_env_overlay() {
 _get_env_namespace() {
   local chart="$1"
   if [[ -n "$ENV_NAME" && "$ENV_NAME" != "production" ]]; then
-    local overlay="$HELM_DIR/$chart/values-${ENV_NAME}.yaml"
+    local overlay="$(_chart_dir "$chart")/values-${ENV_NAME}.yaml"
     if [[ -f "$overlay" ]]; then
       local ns
       ns=$(grep -A1 'global:' "$overlay" 2>/dev/null \
@@ -150,7 +183,7 @@ _get_namespace() {
 
   # 2. Check values.yaml for global.namespace
   local ns
-  ns=$(grep -A1 'global:' "$HELM_DIR/$chart/values.yaml" 2>/dev/null \
+  ns=$(grep -A1 'global:' "$(_chart_dir "$chart")/values.yaml" 2>/dev/null \
        | grep 'namespace:' | awk '{print $2}' | tr -d "\"'")
   if [[ -n "$ns" ]]; then
     echo "$ns"
@@ -229,7 +262,7 @@ _render_proposed() {
   local release ns chart_dir
   release="$(_get_release_name "$chart")"
   ns="$(_get_env_namespace "$chart")"
-  chart_dir="$HELM_DIR/$chart"
+  chart_dir="$(_chart_dir "$chart")"
 
   local template_cmd=(helm template "$release" "$chart_dir" --namespace "$ns")
   local _vfiles
@@ -476,7 +509,7 @@ _preview_chart() {
   local release ns chart_dir
   release="$(_get_release_name "$chart")"
   ns="$(_get_env_namespace "$chart")"
-  chart_dir="$HELM_DIR/$chart"
+  chart_dir="$(_chart_dir "$chart")"
 
   step "Preview: $release (namespace=$ns)"
 
