@@ -16,6 +16,12 @@ install:
 	@for f in $(SHELL_FILES); do \
 		install -m 644 "$$f" "$(INSTALL_DIR)/$$f"; \
 	done
+	@if [ -f k8-util-config.yaml.example ]; then \
+		install -m 644 k8-util-config.yaml.example "$(INSTALL_DIR)/k8-util-config.yaml.example"; \
+	fi
+	@if [ -f .k8-secrets.yaml.example ]; then \
+		install -m 644 .k8-secrets.yaml.example "$(INSTALL_DIR)/.k8-secrets.yaml.example"; \
+	fi
 	@if [ -f config.env.example ]; then \
 		install -m 644 config.env.example "$(INSTALL_DIR)/config.env.example"; \
 	fi

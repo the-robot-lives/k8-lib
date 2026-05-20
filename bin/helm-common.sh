@@ -117,32 +117,35 @@ _get_env_namespace() {
 # =============================================================================
 # Dependency tiers — tier N completes before tier N+1 begins
 #
-# Loaded from external tiers.yaml. Search order:
-#   1. $INFRA_ROOT/tiers.yaml  (project-specific)
-#   2. $K8_LIB_DIR/tiers.yaml  (default template)
-#
-# Format: YAML list of tiers, each with a charts[] array.
+# Loaded from k8-util-config.yaml (.tiers section) via config-resolver.sh.
+# Legacy fallback: tiers.yaml at $INFRA_ROOT or $K8_LIB_DIR.
 # =============================================================================
 _K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-_TIERS_FILE=""
-if [[ -f "${INFRA_ROOT:-}/tiers.yaml" ]]; then
-  _TIERS_FILE="${INFRA_ROOT}/tiers.yaml"
-elif [[ -f "$_K8_LIB_DIR/tiers.yaml" ]]; then
-  _TIERS_FILE="$_K8_LIB_DIR/tiers.yaml"
-fi
 
 TIERS=()
-if [[ -n "$_TIERS_FILE" ]] && command -v yq &>/dev/null; then
-  _tier_count=$(yq '.tiers | length' "$_TIERS_FILE" 2>/dev/null || echo 0)
-  for (( _t=0; _t < _tier_count; _t++ )); do
-    _charts=$(yq -r ".tiers[$_t].charts[]" "$_TIERS_FILE" 2>/dev/null | tr '\n' ' ')
-    _charts="${_charts% }"
-    [[ -n "$_charts" ]] && TIERS+=("$_charts")
-  done
-fi
+if [[ -n "${_K8_CONFIG_PATH:-}" ]] && (( ! _K8_LEGACY_MODE )); then
+  _load_tiers
+else
+  # Legacy: load from standalone tiers.yaml
+  _TIERS_FILE=""
+  if [[ -f "${INFRA_ROOT:-}/tiers.yaml" ]]; then
+    _TIERS_FILE="${INFRA_ROOT}/tiers.yaml"
+  elif [[ -f "$_K8_LIB_DIR/tiers.yaml" ]]; then
+    _TIERS_FILE="$_K8_LIB_DIR/tiers.yaml"
+  fi
 
-if (( ${#TIERS[@]} == 0 )); then
-  echo "⚠️  No tiers loaded — create tiers.yaml in your project root (see k8-lib/tiers.yaml for template)" >&2
+  if [[ -n "$_TIERS_FILE" ]] && command -v yq &>/dev/null; then
+    _tier_count=$(yq '.tiers | length' "$_TIERS_FILE" 2>/dev/null || echo 0)
+    for (( _t=0; _t < _tier_count; _t++ )); do
+      _charts=$(yq -r ".tiers[$_t].charts[]" "$_TIERS_FILE" 2>/dev/null | tr '\n' ' ')
+      _charts="${_charts% }"
+      [[ -n "$_charts" ]] && TIERS+=("$_charts")
+    done
+  fi
+
+  if (( ${#TIERS[@]} == 0 )); then
+    echo "⚠️  No tiers loaded — create tiers.yaml in your project root (see k8-lib/tiers.yaml for template)" >&2
+  fi
 fi
 
 # =============================================================================
@@ -157,19 +160,24 @@ fi
 # located at $INFRA_ROOT/namespaces.conf or $K8_LIB_DIR/namespaces.conf
 # =============================================================================
 
-# Load namespace overrides from config file
+# Load namespace overrides
 declare -A _NS_OVERRIDES=()
-_ns_conf=""
-if [[ -f "${INFRA_ROOT:-}/namespaces.conf" ]]; then
-  _ns_conf="${INFRA_ROOT}/namespaces.conf"
-elif [[ -f "$_K8_LIB_DIR/namespaces.conf" ]]; then
-  _ns_conf="$_K8_LIB_DIR/namespaces.conf"
-fi
-if [[ -n "$_ns_conf" ]]; then
-  while IFS='=' read -r _chart _ns; do
-    [[ "$_chart" =~ ^#.*$ || -z "$_chart" ]] && continue
-    _NS_OVERRIDES["${_chart// /}"]="${_ns// /}"
-  done < "$_ns_conf"
+if [[ -n "${_K8_CONFIG_PATH:-}" ]] && (( ! _K8_LEGACY_MODE )); then
+  _load_ns_overrides
+else
+  # Legacy: load from standalone namespaces.conf
+  _ns_conf=""
+  if [[ -f "${INFRA_ROOT:-}/namespaces.conf" ]]; then
+    _ns_conf="${INFRA_ROOT}/namespaces.conf"
+  elif [[ -f "$_K8_LIB_DIR/namespaces.conf" ]]; then
+    _ns_conf="$_K8_LIB_DIR/namespaces.conf"
+  fi
+  if [[ -n "$_ns_conf" ]]; then
+    while IFS='=' read -r _chart _ns; do
+      [[ "$_chart" =~ ^#.*$ || -z "$_chart" ]] && continue
+      _NS_OVERRIDES["${_chart// /}"]="${_ns// /}"
+    done < "$_ns_conf"
+  fi
 fi
 
 _get_namespace() {
@@ -209,17 +217,22 @@ _get_namespace() {
 #   my-backend=15m
 # =============================================================================
 declare -A _TIMEOUT_OVERRIDES=()
-_to_conf=""
-if [[ -f "${INFRA_ROOT:-}/timeout-overrides.conf" ]]; then
-  _to_conf="${INFRA_ROOT}/timeout-overrides.conf"
-elif [[ -f "$_K8_LIB_DIR/timeout-overrides.conf" ]]; then
-  _to_conf="$_K8_LIB_DIR/timeout-overrides.conf"
-fi
-if [[ -n "$_to_conf" ]]; then
-  while IFS='=' read -r _chart _timeout; do
-    [[ "$_chart" =~ ^#.*$ || -z "$_chart" ]] && continue
-    _TIMEOUT_OVERRIDES["${_chart// /}"]="${_timeout// /}"
-  done < "$_to_conf"
+if [[ -n "${_K8_CONFIG_PATH:-}" ]] && (( ! _K8_LEGACY_MODE )); then
+  _load_timeout_overrides
+else
+  # Legacy: load from standalone timeout-overrides.conf
+  _to_conf=""
+  if [[ -f "${INFRA_ROOT:-}/timeout-overrides.conf" ]]; then
+    _to_conf="${INFRA_ROOT}/timeout-overrides.conf"
+  elif [[ -f "$_K8_LIB_DIR/timeout-overrides.conf" ]]; then
+    _to_conf="$_K8_LIB_DIR/timeout-overrides.conf"
+  fi
+  if [[ -n "$_to_conf" ]]; then
+    while IFS='=' read -r _chart _timeout; do
+      [[ "$_chart" =~ ^#.*$ || -z "$_chart" ]] && continue
+      _TIMEOUT_OVERRIDES["${_chart// /}"]="${_timeout// /}"
+    done < "$_to_conf"
+  fi
 fi
 
 _get_timeout() {

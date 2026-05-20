@@ -8,75 +8,82 @@ Core shell functions and configuration templates sourced by all devops tools. No
 make install    # Installs to ~/.local/share/k8-lib
 ```
 
-## Configuration Files
+## Configuration
 
-These files are **templates**. Copy them to your project root and customize:
+All tools use a single **`k8-util-config.yaml`** file with an optional gitignored **`.k8-secrets.yaml`** for credentials.
 
-### config.env
-
-Primary configuration for all tools. Controls AWS, Docker registry, Kubernetes namespaces, Infisical credentials, and Terraform settings.
+### Quick Start
 
 ```bash
-cp config.env.example /path/to/project/config.env
+cp k8-util-config.yaml.example /path/to/project/k8-util-config.yaml
+cp .k8-secrets.yaml.example /path/to/project/.k8-secrets.yaml
+echo '.k8-secrets.yaml' >> /path/to/project/.gitignore
 ```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `K8_AWS_PROFILE` | `terraformer` | AWS CLI profile name |
-| `K8_AWS_ACCOUNT_ID` | (empty) | AWS account ID for IAM validation |
-| `K8_AWS_REGION` | `us-east-1` | AWS region |
-| `K8_DOCKER_REGISTRY` | (empty) | Docker registry host (e.g., `ops.noizu.com`) |
-| `K8_NAMESPACE` | `default` | Default Kubernetes namespace |
-| `K8_STAGING_NAMESPACE` | `staging` | Staging namespace |
-| `K8_INFRA_NAMESPACE` | `infra` | Infrastructure namespace |
-| `K8_INFISICAL_HOST` | (empty) | Infisical API URL |
-| `K8_INFISICAL_PROJECT_ID` | (empty) | Infisical project ID |
-| `K8_INFISICAL_CLIENT_ID` | (empty) | Universal Auth client ID |
-| `K8_INFISICAL_CLIENT_SECRET` | (empty) | Universal Auth client secret |
-| `K8_TF_DIR` | (empty) | Terraform directory (defaults to `$REPO_ROOT/terraform/production`) |
-| `K8_TF_STATE_BUCKET` | (empty) | S3 bucket for Terraform state |
-| `K8_TF_KMS_ALIAS` | (empty) | KMS alias for state encryption |
-| `K8_TF_LOCK_TABLE` | `terraform-lock` | DynamoDB lock table |
-| `K8_CREDENTIALS_LINK` | (empty) | Link to credentials vault (1Password, etc.) |
-| `K8_DIFF_VIEWER` | `code` | Diff tool for helm preview (`code`, `kdiff3`, `opendiff`, `meld`, `terminal`) |
-| `K8_ADMIN_EMAIL` | `admin@example.com` | Admin email for services |
+### Config Resolution
 
-### tiers.yaml
+Every tool accepts `--config <path>` to specify the config file. Resolution order:
 
-Defines Helm deployment ordering. Each tier completes before the next begins. Charts within a tier deploy in parallel.
+1. `--config <path>` flag
+2. `K8_CONFIG` environment variable
+3. `$INFRA_ROOT/k8-util-config.yaml`
+4. Git-root walker (walks from CWD up through `.git` roots to `/`)
+5. `$K8_LIB_DIR/k8-util-config.yaml` (library defaults)
+6. Legacy fallback with deprecation warning
+
+### k8-util-config.yaml (git-safe)
+
+All paths are relative to the config file's directory. Contains:
+
+| Section | Description |
+|---------|-------------|
+| `aws` | AWS profile, region |
+| `docker` | Registry host |
+| `kubernetes` | Default, staging, infra namespaces |
+| `infisical` | Host, project ID (credentials in secrets file) |
+| `terraform` | State bucket, KMS, lock table |
+| `helm` | OCI registry, registry host |
+| `preferences` | Diff viewer, admin email |
+| `database` | DB name, user prefix, PgBouncer host |
+| `status_patterns` | grep patterns for cluster-status dashboard |
+| `tiers` | Deployment ordering (tier N completes before N+1) |
+| `namespace_overrides` | Chart-to-namespace overrides |
+| `timeout_overrides` | Per-chart Helm timeout overrides |
+| `paths` | Relative paths to helm dir, terraform dir, projects dir |
+
+### .k8-secrets.yaml (gitignored)
+
+Merged on top of the main config at load time. Contains credentials:
 
 ```yaml
-tiers:
-  - name: "Secrets"
-    charts:
-      - infisical-core
-  - name: "Applications"
-    charts:
-      - my-app
+infisical:
+  client_id: "..."
+  client_secret: "..."
+helm:
+  registry_user: "..."
+aws:
+  account_id: "..."
 ```
 
-### namespaces.conf
+Environment variables (`K8_*`) always override values from both files.
 
-Override namespace for charts where `global.namespace` in values.yaml doesn't match the target:
+### Legacy Config Files (Deprecated)
 
-```
-chart-name=target-namespace
-```
+These still work but emit a deprecation warning:
 
-### timeout-overrides.conf
-
-Per-chart Helm timeout overrides (default: 5m):
-
-```
-my-database=30m
-my-backend=15m
-```
+| Legacy File | Replacement |
+|-------------|-------------|
+| `config.env` | `k8-util-config.yaml` (various sections) |
+| `tiers.yaml` | `.tiers` section |
+| `namespaces.conf` | `.namespace_overrides` section |
+| `timeout-overrides.conf` | `.timeout_overrides` section |
 
 ## Library Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `bin/config.sh` | Loads `config.env`, sets defaults for all `K8_*` variables |
+| `bin/config-resolver.sh` | Unified config resolution, YAML accessors, secrets merge |
+| `bin/config.sh` | Loads config (delegates to config-resolver.sh, legacy fallback) |
 | `bin/common.sh` | Color output, logging helpers (`step`, `ok`, `warn`, `fail`, `die`) |
 | `bin/helm-common.sh` | Tier loading, namespace resolution, environment overlays, impact analysis |
 | `bin/docker-config.sh` | Registry config, repo mappings, build state tracking |
