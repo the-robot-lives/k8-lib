@@ -260,6 +260,7 @@ _load_k8_vars() {
   K8_NAMESPACE="${K8_NAMESPACE:-$(_cfg_default '.kubernetes.namespace' 'default')}"
   K8_STAGING_NAMESPACE="${K8_STAGING_NAMESPACE:-$(_cfg_default '.kubernetes.staging_namespace' 'staging')}"
   K8_INFRA_NAMESPACE="${K8_INFRA_NAMESPACE:-$(_cfg_default '.kubernetes.infra_namespace' 'infra')}"
+  K8_APP_PREFIX="${K8_APP_PREFIX:-$(_cfg_default '.kubernetes.app_prefix' 'app')}"
 
   # Infisical
   K8_INFISICAL_HOST="${K8_INFISICAL_HOST:-$(_cfg_default '.infisical.host' '')}"

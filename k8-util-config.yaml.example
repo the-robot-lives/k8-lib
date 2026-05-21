@@ -37,6 +37,7 @@ kubernetes:
   namespace: default          # Default namespace
   staging_namespace: staging  # Staging namespace
   infra_namespace: infra      # Infrastructure namespace
+  app_prefix: app             # App label prefix for staging pod selectors
 
 # --- Infisical (Secrets Manager) ---------------------------------------------
 # client_id and client_secret go in .k8-secrets.yaml
