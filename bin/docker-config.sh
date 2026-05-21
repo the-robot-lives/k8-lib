@@ -15,6 +15,11 @@
 #   K8_DOCKER_REGISTRY — Registry host (overrides YAML)
 # =============================================================================
 
+_DOCKER_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load k8-util-config.yaml (sets K8_DOCKER_REGISTRY, etc.)
+source "$_DOCKER_CFG_DIR/config.sh"
+
 # --- Auto-yes flag (set by --yes/-y in callers) ------------------------------
 AUTO_YES=${AUTO_YES:-false}
 
