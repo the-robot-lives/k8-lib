@@ -6,7 +6,7 @@
 # Sourced by: helm-tools/bin/helm-publish
 #
 # Configuration:
-#   K8_HELM_OCI_REGISTRY  — OCI registry URL (from config.env or env var)
+#   K8_HELM_OCI_REGISTRY  — OCI registry URL (from k8-util-config.yaml or env var)
 #   K8_HELM_REGISTRY_HOST — Registry hostname for login (default: ghcr.io)
 #   K8_HELM_REGISTRY_USER — Registry username for login
 #
@@ -57,7 +57,7 @@ _require_yq() {
 }
 
 # =============================================================================
-# CONSTANTS (from config.env via config.sh)
+# CONSTANTS (from k8-util-config.yaml via config.sh)
 # =============================================================================
 
 HELM_OCI_REGISTRY="${K8_HELM_OCI_REGISTRY:-}"

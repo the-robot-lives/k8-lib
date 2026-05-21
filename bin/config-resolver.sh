@@ -8,7 +8,6 @@
 #   3. $INFRA_ROOT/k8-util-config.yaml
 #   4. Git-root walker (CWD upward, checking each .git root)
 #   5. $K8_LIB_DIR/k8-util-config.yaml (library defaults)
-#   6. Legacy fallback (config.env, tiers.yaml, etc.) with deprecation warning
 #
 # After resolution, merges optional secrets_file (relative to config dir).
 # Env vars always override YAML values.
@@ -34,7 +33,6 @@ _K8_SECRETS_FILENAME=".k8-secrets.yaml"
 _K8_CONFIG_PATH=""        # path to the resolved config file
 _K8_CONFIG_DIR=""          # directory containing the config file
 _K8_MERGED_CONFIG=""       # path to merged (config + secrets) temp file
-_K8_LEGACY_MODE=0          # 1 if using legacy config files
 _K8_MERGED_TMPFILE=""      # temp file to clean up on exit
 
 _K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -76,26 +74,6 @@ _k8_find_config_in_git_roots() {
     fi
     dir="$(dirname "$dir")"
   done
-  return 1
-}
-
-# =============================================================================
-# LEGACY DETECTION
-# =============================================================================
-_k8_detect_legacy_config() {
-  local root="${1:-.}"
-  local found=()
-  [[ -f "$root/config.env" ]] && found+=("config.env")
-  [[ -f "$root/tiers.yaml" && ! -f "$root/$_K8_CONFIG_FILENAME" ]] && found+=("tiers.yaml")
-  [[ -f "$root/namespaces.conf" ]] && found+=("namespaces.conf")
-  [[ -f "$root/timeout-overrides.conf" ]] && found+=("timeout-overrides.conf")
-
-  if (( ${#found[@]} > 0 )); then
-    local IFS=', '
-    echo "⚠️  Legacy config files detected: ${found[*]}" >&2
-    echo "   Migrate to $_K8_CONFIG_FILENAME. See: k8-lib/$_K8_CONFIG_FILENAME.example" >&2
-    return 0
-  fi
   return 1
 }
 
@@ -166,17 +144,7 @@ _resolve_config() {
     candidate="$_K8_LIB_DIR/$_K8_CONFIG_FILENAME"
   fi
 
-  # 5. Legacy fallback
-  if [[ -z "$candidate" ]]; then
-    local legacy_root="${INFRA_ROOT:-.}"
-    if _k8_detect_legacy_config "$legacy_root"; then
-      _K8_LEGACY_MODE=1
-      _K8_CONFIG_DIR="$(cd "$legacy_root" && pwd)"
-      return 0
-    fi
-  fi
-
-  # 6. No config found at all
+  # 5. No config found at all
   if [[ -z "$candidate" ]]; then
     echo "❌ No $_K8_CONFIG_FILENAME found." >&2
     echo "   Searched:" >&2
@@ -242,10 +210,6 @@ _cfg_path() {
 # Load all K8_* variables from YAML. Env vars override YAML values.
 # Uses a single yq call to emit shell assignments.
 _load_k8_vars() {
-  if (( _K8_LEGACY_MODE )); then
-    return 0
-  fi
-
   _k8_require_yq
 
   # AWS
@@ -311,10 +275,6 @@ _load_k8_vars() {
 # Load deployment tiers into TIERS[] array.
 # Each element is a space-separated list of charts for that tier.
 _load_tiers() {
-  if (( _K8_LEGACY_MODE )); then
-    return 0
-  fi
-
   _k8_require_yq
 
   TIERS=()
@@ -336,10 +296,6 @@ _load_tiers() {
 
 # Load namespace overrides into _NS_OVERRIDES associative array.
 _load_ns_overrides() {
-  if (( _K8_LEGACY_MODE )); then
-    return 0
-  fi
-
   _k8_require_yq
 
   declare -gA _NS_OVERRIDES=()
@@ -357,10 +313,6 @@ _load_ns_overrides() {
 
 # Load timeout overrides into _TIMEOUT_OVERRIDES associative array.
 _load_timeout_overrides() {
-  if (( _K8_LEGACY_MODE )); then
-    return 0
-  fi
-
   _k8_require_yq
 
   declare -gA _TIMEOUT_OVERRIDES=()
@@ -373,6 +325,51 @@ _load_timeout_overrides() {
     local val
     val="$(yq eval ".timeout_overrides.\"$key\"" "$_K8_MERGED_CONFIG" 2>/dev/null)"
     [[ -n "$val" && "$val" != "null" ]] && _TIMEOUT_OVERRIDES["$key"]="$val"
+  done
+}
+
+# Load docker repos list into DOCKER_REPOS array.
+_load_docker_repos() {
+  _k8_require_yq
+
+  DOCKER_REPOS=()
+  local count
+  count="$(yq eval '.docker.repos | length' "$_K8_MERGED_CONFIG" 2>/dev/null || echo 0)"
+
+  local _i
+  for (( _i=0; _i < count; _i++ )); do
+    local repo
+    repo="$(yq eval -r ".docker.repos[$_i]" "$_K8_MERGED_CONFIG" 2>/dev/null)"
+    [[ -n "$repo" && "$repo" != "null" ]] && DOCKER_REPOS+=("$repo")
+  done
+}
+
+# Load docker mappings into associative arrays.
+# YAML format under docker.mappings:
+#   image_name:
+#     dir: directory_name        # optional, defaults to image_name
+#     dockerfile: Dockerfile.api # optional, defaults to Dockerfile
+#     single_stage: true         # optional, defaults to false
+_load_docker_mappings() {
+  _k8_require_yq
+
+  declare -gA _DOCKER_DIR_MAP=()
+  declare -gA _DOCKER_DOCKERFILE_MAP=()
+  declare -gA _DOCKER_SINGLE_STAGE_MAP=()
+
+  local keys
+  keys="$(yq eval '.docker.mappings | keys | .[]' "$_K8_MERGED_CONFIG" 2>/dev/null || true)"
+
+  local key
+  for key in $keys; do
+    [[ -z "$key" ]] && continue
+    local dir dockerfile single_stage
+    dir="$(yq eval ".docker.mappings.\"$key\".dir // \"\"" "$_K8_MERGED_CONFIG" 2>/dev/null)"
+    dockerfile="$(yq eval ".docker.mappings.\"$key\".dockerfile // \"\"" "$_K8_MERGED_CONFIG" 2>/dev/null)"
+    single_stage="$(yq eval ".docker.mappings.\"$key\".single_stage // \"\"" "$_K8_MERGED_CONFIG" 2>/dev/null)"
+    [[ -n "$dir" && "$dir" != "null" ]] && _DOCKER_DIR_MAP["$key"]="$dir"
+    [[ -n "$dockerfile" && "$dockerfile" != "null" ]] && _DOCKER_DOCKERFILE_MAP["$key"]="$dockerfile"
+    [[ -n "$single_stage" && "$single_stage" != "null" ]] && _DOCKER_SINGLE_STAGE_MAP["$key"]="$single_stage"
   done
 }
 

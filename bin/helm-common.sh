@@ -118,35 +118,11 @@ _get_env_namespace() {
 # Dependency tiers — tier N completes before tier N+1 begins
 #
 # Loaded from k8-util-config.yaml (.tiers section) via config-resolver.sh.
-# Legacy fallback: tiers.yaml at $INFRA_ROOT or $K8_LIB_DIR.
 # =============================================================================
 _K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 TIERS=()
-if [[ -n "${_K8_CONFIG_PATH:-}" ]] && (( ! _K8_LEGACY_MODE )); then
-  _load_tiers
-else
-  # Legacy: load from standalone tiers.yaml
-  _TIERS_FILE=""
-  if [[ -f "${INFRA_ROOT:-}/tiers.yaml" ]]; then
-    _TIERS_FILE="${INFRA_ROOT}/tiers.yaml"
-  elif [[ -f "$_K8_LIB_DIR/tiers.yaml" ]]; then
-    _TIERS_FILE="$_K8_LIB_DIR/tiers.yaml"
-  fi
-
-  if [[ -n "$_TIERS_FILE" ]] && command -v yq &>/dev/null; then
-    _tier_count=$(yq '.tiers | length' "$_TIERS_FILE" 2>/dev/null || echo 0)
-    for (( _t=0; _t < _tier_count; _t++ )); do
-      _charts=$(yq -r ".tiers[$_t].charts[]" "$_TIERS_FILE" 2>/dev/null | tr '\n' ' ')
-      _charts="${_charts% }"
-      [[ -n "$_charts" ]] && TIERS+=("$_charts")
-    done
-  fi
-
-  if (( ${#TIERS[@]} == 0 )); then
-    echo "⚠️  No tiers loaded — create tiers.yaml in your project root (see k8-lib/tiers.yaml for template)" >&2
-  fi
-fi
+_load_tiers
 
 # =============================================================================
 # Chart → helm --namespace
@@ -156,29 +132,12 @@ fi
 #   2. global.namespace from the chart's values.yaml
 #   3. Convention: infra-* → "infra", app-* → $K8_NAMESPACE, else "default"
 #
-# Namespace overrides can be defined in namespaces.conf (chart=namespace pairs)
-# located at $INFRA_ROOT/namespaces.conf or $K8_LIB_DIR/namespaces.conf
+# Namespace overrides loaded from k8-util-config.yaml (.namespace_overrides section).
 # =============================================================================
 
 # Load namespace overrides
 declare -A _NS_OVERRIDES=()
-if [[ -n "${_K8_CONFIG_PATH:-}" ]] && (( ! _K8_LEGACY_MODE )); then
-  _load_ns_overrides
-else
-  # Legacy: load from standalone namespaces.conf
-  _ns_conf=""
-  if [[ -f "${INFRA_ROOT:-}/namespaces.conf" ]]; then
-    _ns_conf="${INFRA_ROOT}/namespaces.conf"
-  elif [[ -f "$_K8_LIB_DIR/namespaces.conf" ]]; then
-    _ns_conf="$_K8_LIB_DIR/namespaces.conf"
-  fi
-  if [[ -n "$_ns_conf" ]]; then
-    while IFS='=' read -r _chart _ns; do
-      [[ "$_chart" =~ ^#.*$ || -z "$_chart" ]] && continue
-      _NS_OVERRIDES["${_chart// /}"]="${_ns// /}"
-    done < "$_ns_conf"
-  fi
-fi
+_load_ns_overrides
 
 _get_namespace() {
   local chart="$1"
@@ -209,31 +168,10 @@ _get_namespace() {
 # Chart → helm --timeout
 #
 # Returns the --timeout value for a helm upgrade/rollback. Checks
-# timeout-overrides.conf first, then falls back to 5m default.
-#
-# timeout-overrides.conf format (one mapping per line):
-#   # chart-name=timeout
-#   my-db-replica=30m
-#   my-backend=15m
+# k8-util-config.yaml timeout_overrides, then falls back to 5m default.
 # =============================================================================
 declare -A _TIMEOUT_OVERRIDES=()
-if [[ -n "${_K8_CONFIG_PATH:-}" ]] && (( ! _K8_LEGACY_MODE )); then
-  _load_timeout_overrides
-else
-  # Legacy: load from standalone timeout-overrides.conf
-  _to_conf=""
-  if [[ -f "${INFRA_ROOT:-}/timeout-overrides.conf" ]]; then
-    _to_conf="${INFRA_ROOT}/timeout-overrides.conf"
-  elif [[ -f "$_K8_LIB_DIR/timeout-overrides.conf" ]]; then
-    _to_conf="$_K8_LIB_DIR/timeout-overrides.conf"
-  fi
-  if [[ -n "$_to_conf" ]]; then
-    while IFS='=' read -r _chart _timeout; do
-      [[ "$_chart" =~ ^#.*$ || -z "$_chart" ]] && continue
-      _TIMEOUT_OVERRIDES["${_chart// /}"]="${_timeout// /}"
-    done < "$_to_conf"
-  fi
-fi
+_load_timeout_overrides
 
 _get_timeout() {
   local chart="$1"

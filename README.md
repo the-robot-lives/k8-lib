@@ -46,6 +46,8 @@ All paths are relative to the config file's directory. Contains:
 | `preferences` | Diff viewer, admin email |
 | `database` | DB name, user prefix, PgBouncer host |
 | `status_patterns` | grep patterns for cluster-status dashboard |
+| `infisical_bootstrap` | Infisical tier-0 bootstrap settings (namespace, secret names, site URL, DB/Redis hosts) |
+| `telemetry` | VM telemetry setup (environment, host type, OTel collector version, resource detectors) |
 | `tiers` | Deployment ordering (tier N completes before N+1) |
 | `namespace_overrides` | Chart-to-namespace overrides |
 | `timeout_overrides` | Per-chart Helm timeout overrides |
@@ -67,26 +69,16 @@ aws:
 
 Environment variables (`K8_*`) always override values from both files.
 
-### Legacy Config Files (Deprecated)
-
-These still work but emit a deprecation warning:
-
-| Legacy File | Replacement |
-|-------------|-------------|
-| `config.env` | `k8-util-config.yaml` (various sections) |
-| `tiers.yaml` | `.tiers` section |
-| `namespaces.conf` | `.namespace_overrides` section |
-| `timeout-overrides.conf` | `.timeout_overrides` section |
-
 ## Library Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `bin/config-resolver.sh` | Unified config resolution, YAML accessors, secrets merge |
-| `bin/config.sh` | Loads config (delegates to config-resolver.sh, legacy fallback) |
+| `bin/config.sh` | Loads config (delegates to config-resolver.sh) |
 | `bin/common.sh` | Color output, logging helpers (`step`, `ok`, `warn`, `fail`, `die`) |
 | `bin/helm-common.sh` | Tier loading, namespace resolution, environment overlays, impact analysis |
 | `bin/docker-config.sh` | Registry config, repo mappings, build state tracking |
+| `bin/project-registry.sh` | Project.yaml registry loader (parallel arrays for helm release metadata) |
 | `bin/docker-vsn.sh` | Version resolution and tag management |
 | `bin/terraform.sh` | Terraform helpers |
 | `bin/iam.sh` | IAM utilities |

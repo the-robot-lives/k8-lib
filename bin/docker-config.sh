@@ -5,10 +5,14 @@
 #
 # Sourced by: utils/docker-build, utils/docker-push
 #
-# Configuration:
-#   DOCKER_REPOS     — Override via K8_DOCKER_REPOS env var or docker-repos.conf
-#   REGISTRY         — Override via K8_DOCKER_REGISTRY env var or config.env
-#   Repo mappings    — Override via docker-mappings.conf (see below)
+# Configuration loaded from k8-util-config.yaml and project.yaml files:
+#   docker.registry   — Docker registry host
+#   docker.repos      — List of repo names (or auto-discovered from project.yaml)
+#   docker.mappings   — Image-to-directory/dockerfile overrides
+#
+# Env var overrides:
+#   K8_DOCKER_REPOS    — Space-separated repo list (overrides YAML)
+#   K8_DOCKER_REGISTRY — Registry host (overrides YAML)
 # =============================================================================
 
 # --- Auto-yes flag (set by --yes/-y in callers) ------------------------------
@@ -65,64 +69,234 @@ _confirm_yiN() {
 
 # --- Docker repos list -------------------------------------------------------
 # Load from: 1) K8_DOCKER_REPOS env var (space-separated)
-#            2) docker-repos.conf file (one per line, # comments)
-#            3) Empty array (caller must populate)
-_DOCKER_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#            2) project.yaml files (YAML-based, auto-discovered)
+#            3) k8-util-config.yaml docker.repos section
+#            4) Empty array (caller must populate)
 
-if [[ -n "${K8_DOCKER_REPOS:-}" ]]; then
-  read -ra DOCKER_REPOS <<< "$K8_DOCKER_REPOS"
-elif [[ -f "${INFRA_ROOT:-.}/docker-repos.conf" ]]; then
-  mapfile -t DOCKER_REPOS < <(grep -v '^\s*#' "${INFRA_ROOT:-.}/docker-repos.conf" | grep -v '^\s*$')
-elif [[ -f "$_DOCKER_CFG_DIR/docker-repos.conf" ]]; then
-  mapfile -t DOCKER_REPOS < <(grep -v '^\s*#' "$_DOCKER_CFG_DIR/docker-repos.conf" | grep -v '^\s*$')
-else
-  DOCKER_REPOS=()
-fi
-
+DOCKER_REPOS=()
 REGISTRY="${K8_DOCKER_REGISTRY:-}"
 
 # --- State directory (persists build/push tracking) ---
 DOCKER_STATE_DIR="${INFRA_ROOT:-.}/.docker-state"
 
 # =============================================================================
-# Repo mapping configuration
-#
-# docker-mappings.conf format (one mapping per line):
-#   image_name|dir_name|dockerfile|single_stage
-#
-# Example:
-#   my-api|web|Dockerfile.api|false
-#   my-admin|||true
-#
-# Empty fields use defaults: dir=image_name, dockerfile=Dockerfile, single_stage=false
+# Repo mapping tables
 # =============================================================================
 declare -A _DOCKER_DIR_MAP
 declare -A _DOCKER_DOCKERFILE_MAP
 declare -A _DOCKER_SINGLE_STAGE_MAP
+declare -A _DOCKER_REGISTRY_PATH_MAP
+declare -A _DOCKER_BUILD_ARGS_MAP
 
-_load_docker_mappings() {
-  local mappings_file=""
-  if [[ -f "${INFRA_ROOT:-.}/docker-mappings.conf" ]]; then
-    mappings_file="${INFRA_ROOT:-.}/docker-mappings.conf"
-  elif [[ -f "$_DOCKER_CFG_DIR/docker-mappings.conf" ]]; then
-    mappings_file="$_DOCKER_CFG_DIR/docker-mappings.conf"
+# =============================================================================
+# YAML-based auto-discovery from project.yaml
+#
+# Scans project.yaml files under $INFRA_ROOT/repos/ for docker service
+# definitions. Supports both composite (type: composite, projects[].services[])
+# and flat (docker.images[]) project layouts.
+#
+# For composite projects, image keys are "{domain}/{service-name}".
+# For flat projects, image keys are the service name.
+# =============================================================================
+_DOCKER_YAML_LOADED=0
+
+_require_yq() {
+  if ! command -v yq &>/dev/null; then
+    echo "❌ yq is required but not installed. Install via: brew install yq" >&2
+    return 1
   fi
-  [[ -z "$mappings_file" ]] && return
-
-  while IFS='|' read -r image dir dockerfile single_stage; do
-    [[ "$image" =~ ^#.*$ || -z "$image" ]] && continue
-    image=$(echo "$image" | xargs)
-    [[ -n "$dir" ]]          && _DOCKER_DIR_MAP["$image"]="$(echo "$dir" | xargs)"
-    [[ -n "$dockerfile" ]]   && _DOCKER_DOCKERFILE_MAP["$image"]="$(echo "$dockerfile" | xargs)"
-    [[ -n "$single_stage" ]] && _DOCKER_SINGLE_STAGE_MAP["$image"]="$(echo "$single_stage" | xargs)"
-  done < "$mappings_file"
 }
 
-_load_docker_mappings
+_load_composite_docker_services() {
+  local yaml="$1"
+  local yaml_dir
+  yaml_dir="$(dirname "$yaml")"
+
+  local domains
+  domains="$(yq eval '.projects[] | .domain' "$yaml" 2>/dev/null || true)"
+
+  for domain in $domains; do
+    local svc_count
+    svc_count="$(yq eval ".projects[] | select(.domain==\"$domain\") | .services | length // 0" "$yaml" 2>/dev/null || echo "0")"
+    [[ "$svc_count" -eq 0 || "$svc_count" == "null" ]] && continue
+
+    local svc_idx=0
+    while [[ $svc_idx -lt $svc_count ]]; do
+      local svc_base=".projects[] | select(.domain==\"$domain\") | .services[$svc_idx]"
+      local svc_name svc_context svc_dockerfile svc_registry_path svc_auto_detect
+
+      svc_name="$(yq eval "${svc_base}.name" "$yaml" 2>/dev/null || echo "")"
+      [[ -z "$svc_name" || "$svc_name" == "null" ]] && { svc_idx=$((svc_idx + 1)); continue; }
+
+      svc_context="$(yq eval "${svc_base}.context // \"\"" "$yaml" 2>/dev/null || echo "")"
+      svc_dockerfile="$(yq eval "${svc_base}.dockerfile // \"\"" "$yaml" 2>/dev/null || echo "")"
+      svc_registry_path="$(yq eval "${svc_base}.registry_path // \"\"" "$yaml" 2>/dev/null || echo "")"
+      svc_auto_detect="$(yq eval "${svc_base}.auto_detect // \"\"" "$yaml" 2>/dev/null || echo "")"
+
+      [[ "$svc_auto_detect" == "false" ]] || true
+
+      local image_key="${domain}/${svc_name}"
+      local abs_context="${yaml_dir}/projects/${domain}"
+      [[ -n "$svc_context" && "$svc_context" != "null" ]] && abs_context="${abs_context}/${svc_context}"
+
+      DOCKER_REPOS+=("$image_key")
+      _DOCKER_DIR_MAP["$image_key"]="$abs_context"
+
+      if [[ -n "$svc_dockerfile" && "$svc_dockerfile" != "null" ]]; then
+        local df_relative="$svc_dockerfile"
+        if [[ -n "$svc_context" && "$svc_context" != "null" && "$svc_dockerfile" == "${svc_context}/"* ]]; then
+          df_relative="${svc_dockerfile#${svc_context}/}"
+        fi
+        _DOCKER_DOCKERFILE_MAP["$image_key"]="$df_relative"
+      fi
+
+      if [[ -n "$svc_registry_path" && "$svc_registry_path" != "null" ]]; then
+        _DOCKER_REGISTRY_PATH_MAP["$image_key"]="$svc_registry_path"
+      fi
+
+      # Build args as newline-separated KEY=VALUE
+      local arg_count
+      arg_count="$(yq eval "${svc_base}.build_args | keys | length // 0" "$yaml" 2>/dev/null || echo "0")"
+      if [[ "$arg_count" -gt 0 && "$arg_count" != "null" ]]; then
+        local args_str=""
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && args_str+="${line}"$'\n'
+        done < <(yq eval "${svc_base}.build_args | to_entries | .[] | .key + \"=\" + .value" "$yaml" 2>/dev/null || true)
+        [[ -n "$args_str" ]] && _DOCKER_BUILD_ARGS_MAP["$image_key"]="$args_str"
+      fi
+
+      svc_idx=$((svc_idx + 1))
+    done
+  done
+}
+
+_load_flat_docker_services() {
+  local yaml="$1"
+  local yaml_dir
+  yaml_dir="$(dirname "$yaml")"
+
+  local img_count
+  img_count="$(yq eval '.docker.images | length // 0' "$yaml" 2>/dev/null || echo "0")"
+  [[ "$img_count" -eq 0 || "$img_count" == "null" ]] && return
+
+  local img_idx=0
+  while [[ $img_idx -lt $img_count ]]; do
+    local img_base=".docker.images[$img_idx]"
+    local img_name img_context img_dockerfile img_registry_path
+
+    img_name="$(yq eval "${img_base}.name" "$yaml" 2>/dev/null || echo "")"
+    [[ -z "$img_name" || "$img_name" == "null" ]] && { img_idx=$((img_idx + 1)); continue; }
+
+    img_context="$(yq eval "${img_base}.context // \"\"" "$yaml" 2>/dev/null || echo "")"
+    img_dockerfile="$(yq eval "${img_base}.dockerfile // \"\"" "$yaml" 2>/dev/null || echo "")"
+    img_registry_path="$(yq eval "${img_base}.registry_path // \"\"" "$yaml" 2>/dev/null || echo "")"
+
+    local abs_context="$yaml_dir"
+    [[ -n "$img_context" && "$img_context" != "null" ]] && abs_context="${yaml_dir}/${img_context}"
+
+    DOCKER_REPOS+=("$img_name")
+    _DOCKER_DIR_MAP["$img_name"]="$abs_context"
+
+    if [[ -n "$img_dockerfile" && "$img_dockerfile" != "null" ]]; then
+      _DOCKER_DOCKERFILE_MAP["$img_name"]="$img_dockerfile"
+    fi
+
+    if [[ -n "$img_registry_path" && "$img_registry_path" != "null" ]]; then
+      _DOCKER_REGISTRY_PATH_MAP["$img_name"]="$img_registry_path"
+    fi
+
+    local arg_count
+    arg_count="$(yq eval "${img_base}.build_args | keys | length // 0" "$yaml" 2>/dev/null || echo "0")"
+    if [[ "$arg_count" -gt 0 && "$arg_count" != "null" ]]; then
+      local args_str=""
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && args_str+="${line}"$'\n'
+      done < <(yq eval "${img_base}.build_args | to_entries | .[] | .key + \"=\" + .value" "$yaml" 2>/dev/null || true)
+      [[ -n "$args_str" ]] && _DOCKER_BUILD_ARGS_MAP["$img_name"]="$args_str"
+    fi
+
+    img_idx=$((img_idx + 1))
+  done
+}
+
+_load_yaml_docker_repos() {
+  _require_yq || return
+
+  local projects_dir="${INFRA_ROOT:-.}"
+  local yaml
+
+  while IFS= read -r -d '' yaml; do
+    [ -f "$yaml" ] || continue
+
+    if yq eval '.type // ""' "$yaml" 2>/dev/null | grep -q "composite"; then
+      _load_composite_docker_services "$yaml"
+    fi
+
+    _load_flat_docker_services "$yaml"
+  done < <(find "${projects_dir}/repos" -name "project.yaml" -maxdepth 5 -print0 2>/dev/null)
+}
+
+_init_docker_repos() {
+  [[ $_DOCKER_YAML_LOADED -eq 1 ]] && return
+
+  if [[ -n "${K8_DOCKER_REPOS:-}" ]]; then
+    read -ra DOCKER_REPOS <<< "$K8_DOCKER_REPOS"
+  else
+    _load_yaml_docker_repos
+  fi
+
+  # Fallback: load from k8-util-config.yaml docker.repos / docker.mappings
+  if [[ ${#DOCKER_REPOS[@]} -eq 0 && -n "${_K8_CONFIG_PATH:-}" ]]; then
+    _load_docker_repos
+    _load_docker_mappings
+  fi
+
+  _DOCKER_YAML_LOADED=1
+}
+
+_init_docker_repos
+
+# =============================================================================
+# PUBLIC API
+# =============================================================================
 
 # -----------------------------------------------------------------------------
-# _repo_dir_name — return the directory name under repos/ for an image
-#   Checks mappings config first, then falls back to image name as-is.
+# get_all_docker_repos — list all known docker image keys
+# -----------------------------------------------------------------------------
+get_all_docker_repos() {
+  printf '%s\n' "${DOCKER_REPOS[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# _registry_path_for_image — return the registry path override for an image
+#   Falls back to image name if no override configured.
+# -----------------------------------------------------------------------------
+_registry_path_for_image() {
+  local image="$1"
+  if [[ -n "${_DOCKER_REGISTRY_PATH_MAP[$image]+x}" ]]; then
+    echo "${_DOCKER_REGISTRY_PATH_MAP[$image]}"
+  else
+    echo "$image"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# _get_build_args — emit --build-arg flags for an image (one per line)
+# -----------------------------------------------------------------------------
+_get_build_args() {
+  local image="$1"
+  if [[ -n "${_DOCKER_BUILD_ARGS_MAP[$image]+x}" ]]; then
+    local line
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && echo "--build-arg" && echo "$line"
+    done <<< "${_DOCKER_BUILD_ARGS_MAP[$image]}"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# _repo_dir_name — return the directory path for an image
+#   For YAML-discovered repos this is an absolute path.
+#   For legacy repos, relative name under repos/.
 # -----------------------------------------------------------------------------
 _repo_dir_name() {
   local image="$1"
@@ -134,8 +308,7 @@ _repo_dir_name() {
 }
 
 # -----------------------------------------------------------------------------
-# _image_for_dir — reverse lookup: directory name → image name
-#   Checks mappings config first, then falls back to directory name as-is.
+# _image_for_dir — reverse lookup: directory path → image name
 # -----------------------------------------------------------------------------
 _image_for_dir() {
   local dir="$1"
@@ -163,7 +336,6 @@ _dockerfile_for_image() {
 
 # -----------------------------------------------------------------------------
 # _is_single_stage — returns 0 if image uses a single-stage Dockerfile
-#   (no --target flag should be passed)
 # -----------------------------------------------------------------------------
 _is_single_stage() {
   local image="$1"
@@ -175,15 +347,13 @@ _is_single_stage() {
 }
 
 # -----------------------------------------------------------------------------
-# normalize_repo_name — resolve directory names / shorthand to canonical image name
+# normalize_repo_name — resolve directory names / shorthand to canonical image
 # -----------------------------------------------------------------------------
 normalize_repo_name() {
   local name="$1"
-  # Check if it's already a known image name
   for repo in "${DOCKER_REPOS[@]}"; do
     [[ "$repo" == "$name" ]] && echo "$name" && return 0
   done
-  # Check if it's a directory name that maps to an image
   local image
   image="$(_image_for_dir "$name")"
   for repo in "${DOCKER_REPOS[@]}"; do
@@ -207,9 +377,9 @@ detect_docker_repo() {
   local dir="$1"
   for repo in "${DOCKER_REPOS[@]}"; do
     local repo_dir
-    repo_dir="$(_repo_dir_name "$repo")"
-    # Match /repos/DIR or /repos/DIR/... anywhere in the path
-    if [[ "$dir" =~ /repos/${repo_dir}(/|$) || "$dir" == *"/${repo_dir}" ]]; then
+    repo_dir="${_DOCKER_DIR_MAP[$repo]:-}"
+    [[ -z "$repo_dir" ]] && continue
+    if [[ "$dir" == "$repo_dir" || "$dir" == "$repo_dir"/* ]]; then
       DETECTED_REPO="$repo"
       return 0
     fi
@@ -218,13 +388,18 @@ detect_docker_repo() {
 }
 
 # -----------------------------------------------------------------------------
-# get_repo_dir — return absolute path for a repo
+# get_repo_dir — return absolute path for a repo's build context
 # -----------------------------------------------------------------------------
 get_repo_dir() {
   local image="$1"
   local dir
   dir="$(_repo_dir_name "$image")"
-  echo "${INFRA_ROOT}/repos/${dir}"
+  # YAML-discovered repos store absolute paths
+  if [[ "$dir" == /* ]]; then
+    echo "$dir"
+  else
+    echo "${INFRA_ROOT}/repos/${dir}"
+  fi
 }
 
 # =============================================================================
