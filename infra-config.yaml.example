@@ -1,8 +1,8 @@
-# k8-util-config.yaml — Structural deployment config for k8-lib devops tools
+# infra-config.yaml — Unified infrastructure config for k8-lib devops tools
 # Copy to your project root and customize. This file is safe to commit.
 #
-# This file contains ONLY structural/topology data: tiers, namespace
-# overrides, timeouts, paths, and patterns.
+# Contains structural/topology data (tiers, namespace overrides, timeouts,
+# paths, patterns) and project build/deploy metadata.
 #
 # Scalar config (AWS, Docker, Helm, Infisical, etc.) lives in .envrc.k8.dc
 # via direnv-config. See .envrc.k8.dc.example for the template.
@@ -85,3 +85,26 @@ helm_scan_dirs:
 # --- Chart Path Overrides -----------------------------------------------------
 # Explicit chart-name → directory overrides (for non-standard locations).
 chart_path_overrides: {}
+
+# =============================================================================
+# Project Registry — build/deploy metadata for portfolio projects
+# =============================================================================
+# project:
+#   name: my-project
+#   status: active                        # active | disabled | kickoff-only
+#   type: composite                       # composite (multi-domain) or omit for flat
+#   projects:
+#     - domain: example.com
+#       services:
+#         - name: backend
+#           dockerfile: app/backend/Dockerfile
+#           context: app/backend
+#           registry_path: example.com/backend
+#           helm:
+#             chart_path: helm/apps/example
+#             values_path: .example.backend.image
+#             format: image                # image (full URI) or tag (version only)
+#       helm:
+#         charts:
+#           - name: example
+#             path: helm/example

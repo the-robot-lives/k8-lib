@@ -40,7 +40,7 @@ load_project_registry() {
 
   if [[ -z "$projects_dir" ]]; then
     echo "❌ PROJECTS_DIR not set and no argument given to load_project_registry" >&2
-    echo "   Set paths.projects_dir in k8-util-config.yaml or pass a path argument" >&2
+    echo "   Set paths.projects_dir in infra-config.yaml or pass a path argument" >&2
     return 1
   fi
 

@@ -2,12 +2,12 @@
 # =============================================================================
 # config-resolver.sh — Unified config resolution for k8-lib tools
 #
-# Resolves k8-util-config.yaml via (in order):
+# Resolves infra-config.yaml via (in order):
 #   1. --config <path> flag (pre-parsed into K8_CONFIG before sourcing)
 #   2. K8_CONFIG environment variable
-#   3. $INFRA_ROOT/k8-util-config.yaml
+#   3. $INFRA_ROOT/infra-config.yaml
 #   4. Git-root walker (CWD upward, checking each .git root)
-#   5. $K8_LIB_DIR/k8-util-config.yaml (library defaults)
+#   5. $K8_LIB_DIR/infra-config.yaml (library defaults)
 #
 # Scalar config (AWS, Helm, etc.) is read from dc via _dc_get.
 # Structural data (tiers, namespaces) is read from the YAML via _cfg.
@@ -25,7 +25,7 @@ _K8_CONFIG_RESOLVER_LOADED=1
 # =============================================================================
 # CONSTANTS
 # =============================================================================
-_K8_CONFIG_FILENAME="k8-util-config.yaml"
+_K8_CONFIG_FILENAME="infra-config.yaml"
 
 # =============================================================================
 # STATE (set by _resolve_config, read by accessors)
@@ -87,7 +87,7 @@ _resolve_config() {
     candidate="$K8_CONFIG"
   fi
 
-  # 2. $INFRA_ROOT/k8-util-config.yaml
+  # 2. $INFRA_ROOT/infra-config.yaml
   if [[ -z "$candidate" && -n "${INFRA_ROOT:-}" && -f "$INFRA_ROOT/$_K8_CONFIG_FILENAME" ]]; then
     candidate="$INFRA_ROOT/$_K8_CONFIG_FILENAME"
   fi
@@ -196,6 +196,7 @@ _load_k8_vars() {
   K8_NAMESPACE="${K8_NAMESPACE:-$(_dc_get k8 kubernetes.namespace .kubernetes.namespace 'default')}"
   K8_STAGING_NAMESPACE="${K8_STAGING_NAMESPACE:-$(_dc_get k8 kubernetes.staging_namespace .kubernetes.staging_namespace 'staging')}"
   K8_INFRA_NAMESPACE="${K8_INFRA_NAMESPACE:-$(_dc_get k8 kubernetes.infra_namespace .kubernetes.infra_namespace 'infra')}"
+  K8_APP_PREFIX="${K8_APP_PREFIX:-$(_dc_get k8 kubernetes.app_prefix '' 'app')}"
 
   # Infisical
   K8_INFISICAL_HOST="${K8_INFISICAL_HOST:-$(_dc_get k8 infisical.host .infisical.host '')}"
@@ -205,6 +206,9 @@ _load_k8_vars() {
 
   # Terraform
   K8_TF_DIR="${K8_TF_DIR:-$(_cfg_path '.paths.terraform_dir')}"
+  K8_TF_STATE_BUCKET="${K8_TF_STATE_BUCKET:-$(_dc_get k8 terraform.state_bucket '' '')}"
+  K8_TF_KMS_ALIAS="${K8_TF_KMS_ALIAS:-$(_dc_get k8 terraform.kms_alias '' '')}"
+  K8_TF_LOCK_TABLE="${K8_TF_LOCK_TABLE:-$(_dc_get k8 terraform.lock_table '' 'terraform-lock')}"
 
   # Helm
   K8_HELM_OCI_REGISTRY="${K8_HELM_OCI_REGISTRY:-$(_dc_get k8 helm.oci_registry .helm.oci_registry '')}"

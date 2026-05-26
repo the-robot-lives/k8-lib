@@ -5,10 +5,11 @@
 #
 # Sourced by: utils/docker-build, utils/docker-push
 #
-# Configuration loaded from k8-util-config.yaml and project.yaml files:
+# Configuration loaded from infra-config.yaml (merged config):
 #   docker.registry   — Docker registry host
-#   docker.repos      — List of repo names (or auto-discovered from project.yaml)
+#   docker.repos      — List of repo names (or auto-discovered from .project section)
 #   docker.mappings   — Image-to-directory/dockerfile overrides
+#   project.*         — Project definitions (composite or flat docker images)
 #
 # Env var overrides:
 #   K8_DOCKER_REPOS    — Space-separated repo list (overrides YAML)
@@ -17,7 +18,7 @@
 
 _DOCKER_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load k8-util-config.yaml (sets K8_DOCKER_REGISTRY, etc.)
+# Load infra-config.yaml (sets K8_DOCKER_REGISTRY, etc.)
 source "$_DOCKER_CFG_DIR/config.sh"
 
 # --- Auto-yes flag (set by --yes/-y in callers) ------------------------------
@@ -74,8 +75,8 @@ _confirm_yiN() {
 
 # --- Docker repos list -------------------------------------------------------
 # Load from: 1) K8_DOCKER_REPOS env var (space-separated)
-#            2) project.yaml files (YAML-based, auto-discovered)
-#            3) k8-util-config.yaml docker.repos section
+#            2) .project section in merged infra-config.yaml
+#            3) docker.repos section in merged infra-config.yaml
 #            4) Empty array (caller must populate)
 
 DOCKER_REPOS=()
@@ -94,11 +95,11 @@ declare -A _DOCKER_REGISTRY_PATH_MAP
 declare -A _DOCKER_BUILD_ARGS_MAP
 
 # =============================================================================
-# YAML-based auto-discovery from project.yaml
+# YAML-based auto-discovery from merged infra-config.yaml
 #
-# Scans project.yaml files under $INFRA_ROOT/repos/ for docker service
-# definitions. Supports both composite (type: composite, projects[].services[])
-# and flat (docker.images[]) project layouts.
+# Reads the .project section of $_K8_MERGED_CONFIG for docker service
+# definitions. Supports both composite (project.type: composite,
+# project.projects[].services[]) and flat (project.docker.images[]) layouts.
 #
 # For composite projects, image keys are "{domain}/{service-name}".
 # For flat projects, image keys are the service name.
@@ -114,23 +115,31 @@ _require_yq() {
 
 _load_composite_docker_services() {
   local yaml="$1"
-  local yaml_dir
-  yaml_dir="$(dirname "$yaml")"
+  local config_dir="${_K8_CONFIG_DIR:-.}"
+
+  # Resolve composite project root via PROJECTS_DIR + project.name
+  # e.g., PROJECTS_DIR=<root>/repos, project.name=incubator → <root>/repos/incubator
+  local project_name
+  project_name="$(yq eval '.project.name // ""' "$yaml" 2>/dev/null || echo "")"
+  local project_root="${config_dir}"
+  if [[ -n "${PROJECTS_DIR:-}" && -n "$project_name" && "$project_name" != "null" ]]; then
+    project_root="${PROJECTS_DIR}/${project_name}"
+  fi
 
   local domains
-  domains="$(yq eval '.projects[] | .domain' "$yaml" 2>/dev/null || true)"
+  domains="$(yq eval '.project.projects[] | .domain' "$yaml" 2>/dev/null || true)"
 
   for domain in $domains; do
     local svc_count
-    svc_count="$(yq eval ".projects[] | select(.domain==\"$domain\") | .services | length // 0" "$yaml" 2>/dev/null || echo "0")"
+    svc_count="$(yq eval ".project.projects[] | select(.domain==\"$domain\") | .services | length // 0" "$yaml" 2>/dev/null || echo "0")"
     [[ "$svc_count" -eq 0 || "$svc_count" == "null" ]] && continue
 
     local _dc_base_path
-    _dc_base_path="$(yq eval ".projects[] | select(.domain==\"$domain\") | .base_path // \"\"" "$yaml" 2>/dev/null || echo "")"
+    _dc_base_path="$(yq eval ".project.projects[] | select(.domain==\"$domain\") | .base_path // \"\"" "$yaml" 2>/dev/null || echo "")"
 
     local svc_idx=0
     while [[ $svc_idx -lt $svc_count ]]; do
-      local svc_base=".projects[] | select(.domain==\"$domain\") | .services[$svc_idx]"
+      local svc_base=".project.projects[] | select(.domain==\"$domain\") | .services[$svc_idx]"
       local svc_name svc_context svc_dockerfile svc_registry_path svc_auto_detect
 
       svc_name="$(yq eval "${svc_base}.name" "$yaml" 2>/dev/null || echo "")"
@@ -146,9 +155,9 @@ _load_composite_docker_services() {
       local image_key="${domain}/${svc_name}"
       local abs_context
       if [[ -n "$_dc_base_path" && "$_dc_base_path" != "null" ]]; then
-        abs_context="${yaml_dir}/${_dc_base_path}"
+        abs_context="${project_root}/${_dc_base_path}"
       else
-        abs_context="${yaml_dir}/projects/${domain}"
+        abs_context="${project_root}/projects/${domain}"
       fi
       [[ -n "$svc_context" && "$svc_context" != "null" ]] && abs_context="${abs_context}/${svc_context}"
 
@@ -185,16 +194,15 @@ _load_composite_docker_services() {
 
 _load_flat_docker_services() {
   local yaml="$1"
-  local yaml_dir
-  yaml_dir="$(dirname "$yaml")"
+  local config_dir="${_K8_CONFIG_DIR:-.}"
 
   local img_count
-  img_count="$(yq eval '.docker.images | length // 0' "$yaml" 2>/dev/null || echo "0")"
+  img_count="$(yq eval '.project.docker.images | length // 0' "$yaml" 2>/dev/null || echo "0")"
   [[ "$img_count" -eq 0 || "$img_count" == "null" ]] && return
 
   local img_idx=0
   while [[ $img_idx -lt $img_count ]]; do
-    local img_base=".docker.images[$img_idx]"
+    local img_base=".project.docker.images[$img_idx]"
     local img_name img_context img_dockerfile img_registry_path
 
     img_name="$(yq eval "${img_base}.name" "$yaml" 2>/dev/null || echo "")"
@@ -204,8 +212,8 @@ _load_flat_docker_services() {
     img_dockerfile="$(yq eval "${img_base}.dockerfile // \"\"" "$yaml" 2>/dev/null || echo "")"
     img_registry_path="$(yq eval "${img_base}.registry_path // \"\"" "$yaml" 2>/dev/null || echo "")"
 
-    local abs_context="$yaml_dir"
-    [[ -n "$img_context" && "$img_context" != "null" ]] && abs_context="${yaml_dir}/${img_context}"
+    local abs_context="$config_dir"
+    [[ -n "$img_context" && "$img_context" != "null" ]] && abs_context="${config_dir}/${img_context}"
 
     DOCKER_REPOS+=("$img_name")
     _DOCKER_DIR_MAP["$img_name"]="$abs_context"
@@ -235,18 +243,19 @@ _load_flat_docker_services() {
 _load_yaml_docker_repos() {
   _require_yq || return
 
-  local projects_dir="${INFRA_ROOT:-.}"
-  local yaml
+  local yaml="${_K8_MERGED_CONFIG:-}"
+  [[ -z "$yaml" || ! -f "$yaml" ]] && return
 
-  while IFS= read -r -d '' yaml; do
-    [ -f "$yaml" ] || continue
+  # Check if the merged config has a .project section
+  local project_type
+  project_type="$(yq eval '.project.type // ""' "$yaml" 2>/dev/null || true)"
+  [[ -z "$project_type" && "$(yq eval '.project // ""' "$yaml" 2>/dev/null)" == "" ]] && return
 
-    if yq eval '.type // ""' "$yaml" 2>/dev/null | grep -q "composite"; then
-      _load_composite_docker_services "$yaml"
-    fi
+  if [[ "$project_type" == "composite" ]]; then
+    _load_composite_docker_services "$yaml"
+  fi
 
-    _load_flat_docker_services "$yaml"
-  done < <(find "${projects_dir}/repos" -name "project.yaml" -maxdepth 5 -print0 2>/dev/null)
+  _load_flat_docker_services "$yaml"
 }
 
 _init_docker_repos() {
@@ -258,7 +267,7 @@ _init_docker_repos() {
     _load_yaml_docker_repos
   fi
 
-  # Fallback: load from k8-util-config.yaml docker.repos / docker.mappings
+  # Fallback: load from infra-config.yaml docker.repos / docker.mappings
   if [[ ${#DOCKER_REPOS[@]} -eq 0 && -n "${_K8_CONFIG_PATH:-}" ]]; then
     _load_docker_repos
     _load_docker_mappings

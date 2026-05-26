@@ -2,7 +2,7 @@
 # =============================================================================
 # config.sh — Load configuration for k8-lib tools
 #
-# Reads from k8-util-config.yaml via config-resolver.sh.
+# Reads from infra-config.yaml via config-resolver.sh.
 # All values can also be set as environment variables before sourcing.
 # =============================================================================
 

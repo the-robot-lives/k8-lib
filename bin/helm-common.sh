@@ -144,7 +144,7 @@ _get_env_namespace() {
 # =============================================================================
 # Dependency tiers — tier N completes before tier N+1 begins
 #
-# Loaded from k8-util-config.yaml (.tiers section) via config-resolver.sh.
+# Loaded from infra-config.yaml (.tiers section) via config-resolver.sh.
 # =============================================================================
 _K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -159,7 +159,7 @@ _load_tiers
 #   2. global.namespace from the chart's values.yaml
 #   3. Convention: infra-* → "infra", app-* → $K8_NAMESPACE, else "default"
 #
-# Namespace overrides loaded from k8-util-config.yaml (.namespace_overrides section).
+# Namespace overrides loaded from infra-config.yaml (.namespace_overrides section).
 # =============================================================================
 
 # Load namespace overrides
@@ -195,7 +195,7 @@ _get_namespace() {
 # Chart → helm --timeout
 #
 # Returns the --timeout value for a helm upgrade/rollback. Checks
-# k8-util-config.yaml timeout_overrides, then falls back to 5m default.
+# infra-config.yaml timeout_overrides, then falls back to 5m default.
 # =============================================================================
 declare -A _TIMEOUT_OVERRIDES=()
 _load_timeout_overrides

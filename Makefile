@@ -16,19 +16,10 @@ install:
 	@for f in $(SHELL_FILES); do \
 		install -m 644 "$$f" "$(INSTALL_DIR)/$$f"; \
 	done
-	@if [ -f k8-util-config.yaml.example ]; then \
-		install -m 644 k8-util-config.yaml.example "$(INSTALL_DIR)/k8-util-config.yaml.example"; \
+	@if [ -f infra-config.yaml.example ]; then \
+		install -m 644 infra-config.yaml.example "$(INSTALL_DIR)/infra-config.yaml.example"; \
 	fi
-	@if [ -f .k8-secrets.yaml.example ]; then \
-		install -m 644 .k8-secrets.yaml.example "$(INSTALL_DIR)/.k8-secrets.yaml.example"; \
-	fi
-	@if [ -f config.env.example ]; then \
-		install -m 644 config.env.example "$(INSTALL_DIR)/config.env.example"; \
-	fi
-	@if [ -f namespaces.conf ]; then \
-		install -m 644 namespaces.conf "$(INSTALL_DIR)/namespaces.conf"; \
-	fi
-	@if [ -f tiers.yaml ]; then \
-		install -m 644 tiers.yaml "$(INSTALL_DIR)/tiers.yaml"; \
+	@if [ -f .envrc.k8.dc.example ]; then \
+		install -m 644 .envrc.k8.dc.example "$(INSTALL_DIR)/.envrc.k8.dc.example"; \
 	fi
 	@echo "✓ Installed k8-lib to $(INSTALL_DIR)"

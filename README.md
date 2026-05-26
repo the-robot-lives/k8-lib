@@ -12,13 +12,13 @@ make install    # Installs to ~/.local/share/k8-lib
 
 Tools use two config layers:
 
-- **`k8-util-config.yaml`** — Structural data (tiers, namespace overrides, timeouts, paths). Safe to commit.
+- **`infra-config.yaml`** — Structural data (tiers, namespace overrides, timeouts, paths). Safe to commit.
 - **`.envrc.k8.dc`** — Scalar config + secrets via direnv-config (AWS, Docker, Helm, Infisical). Secrets layer is gitignored.
 
 ### Quick Start
 
 ```bash
-cp k8-util-config.yaml.example /path/to/project/k8-util-config.yaml
+cp infra-config.yaml.example /path/to/project/infra-config.yaml
 cp .envrc.k8.dc.example /path/to/project/.envrc.k8.dc
 # Add to .envrc: source_env_if_exists .envrc.k8.dc
 ```
@@ -29,12 +29,12 @@ Every tool accepts `--config <path>` to specify the config file. Resolution orde
 
 1. `--config <path>` flag
 2. `K8_CONFIG` environment variable
-3. `$INFRA_ROOT/k8-util-config.yaml`
+3. `$INFRA_ROOT/infra-config.yaml`
 4. Git-root walker (walks from CWD up through `.git` roots to `/`)
-5. `$K8_LIB_DIR/k8-util-config.yaml` (library defaults)
+5. `$K8_LIB_DIR/infra-config.yaml` (library defaults)
 6. Legacy fallback with deprecation warning
 
-### k8-util-config.yaml (git-safe)
+### infra-config.yaml (git-safe)
 
 Structural deployment topology. All paths are relative to the config file's directory:
 
@@ -65,7 +65,7 @@ Tools resolve values via: env var → `dc get k8 <path>` → YAML fallback → h
 | `bin/common.sh` | Color output, logging helpers (`step`, `ok`, `warn`, `fail`, `die`) |
 | `bin/helm-common.sh` | Tier loading, namespace resolution, environment overlays, impact analysis |
 | `bin/docker-config.sh` | Registry config, repo mappings, build state tracking |
-| `bin/project-registry.sh` | Project.yaml registry loader (parallel arrays for helm release metadata) |
+| `bin/project-registry.sh` | infra-config.yaml project registry loader (parallel arrays for helm release metadata) |
 | `bin/docker-vsn.sh` | Version resolution and tag management |
 | `bin/terraform.sh` | Terraform helpers |
 | `bin/iam.sh` | IAM utilities |

@@ -6,14 +6,14 @@
 # Sourced by: helm-tools/bin/helm-publish
 #
 # Configuration:
-#   K8_HELM_OCI_REGISTRY  — OCI registry URL (from k8-util-config.yaml or env var)
+#   K8_HELM_OCI_REGISTRY  — OCI registry URL (from infra-config.yaml or env var)
 #   K8_HELM_REGISTRY_HOST — Registry hostname for login (default: ghcr.io)
 #   K8_HELM_REGISTRY_USER — Registry username for login
 #
 # Chart discovery:
-#   Scans project.yaml files for helm.charts[] entries.
-#   Composite projects: projects[].helm.charts[]
-#   Flat projects:      helm.charts[]
+#   Reads merged infra-config.yaml via $_K8_MERGED_CONFIG.
+#   Composite projects: .project.projects[].helm.charts[]
+#   Flat projects:      .project.helm.charts[]
 # =============================================================================
 
 [[ "${_HELM_PUBLISH_CONFIG_LOADED:-0}" -eq 1 ]] && return 0
@@ -57,7 +57,7 @@ _require_yq() {
 }
 
 # =============================================================================
-# CONSTANTS (from k8-util-config.yaml via config.sh)
+# CONSTANTS (from infra-config.yaml via config.sh)
 # =============================================================================
 
 HELM_OCI_REGISTRY="${K8_HELM_OCI_REGISTRY:-}"
@@ -78,62 +78,60 @@ declare -A _HELM_CHART_PROJECT_MAP 2>/dev/null || true
 declare -A _HELM_CHART_REGISTRY_MAP 2>/dev/null || true
 
 _load_yaml_helm_charts() {
-  local projects_dir="${INFRA_ROOT}"
-  local yaml
+  local yaml="${_K8_MERGED_CONFIG:-}"
+  local config_dir="${_K8_CONFIG_DIR:-${INFRA_ROOT:-.}}"
 
   _require_yq
 
-  # Scan for project.yaml files — supports arbitrary nesting patterns
-  while IFS= read -r -d '' yaml; do
-    [ -f "$yaml" ] || continue
+  if [[ -z "$yaml" || ! -f "$yaml" ]]; then
+    echo "⚠️  No merged config found (\$_K8_MERGED_CONFIG not set or missing)" >&2
+    return 0
+  fi
 
-    local project_name
-    project_name="$(basename "$(dirname "$yaml")")"
-    local project_dir
-    project_dir="$(dirname "$yaml")"
+  local project_name
+  project_name="$(yq eval '.project.name // "unknown"' "$yaml" 2>/dev/null)"
 
-    if yq eval '.type // ""' "$yaml" 2>/dev/null | grep -q "composite"; then
-      _load_composite_helm_charts "$yaml" "$project_name"
-    fi
+  # Read project data from merged infra-config.yaml under .project key
+  if yq eval '.project.type // ""' "$yaml" 2>/dev/null | grep -q "composite"; then
+    _load_composite_helm_charts "$yaml" "$project_name" "$config_dir"
+  fi
 
-    _load_flat_helm_charts "$yaml" "$project_name" "$project_dir"
-  done < <(find "$projects_dir" -name "project.yaml" -maxdepth 5 -print0 2>/dev/null)
+  _load_flat_helm_charts "$yaml" "$project_name" "$config_dir"
 }
 
 _load_composite_helm_charts() {
   local yaml="$1"
   local project_name="$2"
+  local config_dir="$3"
   local _hc_domain _hc_chart_name _hc_chart_path _hc_chart_registry
 
   local domains
-  domains="$(yq eval '.projects[] | .domain' "$yaml" 2>/dev/null || true)"
+  domains="$(yq eval '.project.projects[] | .domain' "$yaml" 2>/dev/null || true)"
 
   for _hc_domain in $domains; do
     local chart_count
-    chart_count="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .helm.charts | length // 0" "$yaml" 2>/dev/null || echo "0")"
+    chart_count="$(yq eval ".project.projects[] | select(.domain==\"$_hc_domain\") | .helm.charts | length // 0" "$yaml" 2>/dev/null || echo "0")"
     [[ "$chart_count" -eq 0 || "$chart_count" == "null" ]] && continue
 
     # base_path override: allows projects outside the standard projects/<domain>/ convention
     local _hc_base_path
-    _hc_base_path="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .base_path // \"\"" "$yaml" 2>/dev/null || echo "")"
+    _hc_base_path="$(yq eval ".project.projects[] | select(.domain==\"$_hc_domain\") | .base_path // \"\"" "$yaml" 2>/dev/null || echo "")"
 
     local chart_idx=0
     while [[ $chart_idx -lt $chart_count ]]; do
-      _hc_chart_name="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].name" "$yaml" 2>/dev/null || echo "")"
-      _hc_chart_path="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].path" "$yaml" 2>/dev/null || echo "")"
-      _hc_chart_registry="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].registry // \"\"" "$yaml" 2>/dev/null || echo "")"
+      _hc_chart_name="$(yq eval ".project.projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].name" "$yaml" 2>/dev/null || echo "")"
+      _hc_chart_path="$(yq eval ".project.projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].path" "$yaml" 2>/dev/null || echo "")"
+      _hc_chart_registry="$(yq eval ".project.projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].registry // \"\"" "$yaml" 2>/dev/null || echo "")"
 
       [[ -z "$_hc_chart_name" || "$_hc_chart_name" == "null" ]] && { chart_idx=$((chart_idx + 1)); continue; }
 
       local chart_key="${_hc_domain}/${_hc_chart_name}"
 
-      local yaml_dir
-      yaml_dir="$(dirname "$yaml")"
       local abs_path
       if [[ -n "$_hc_base_path" && "$_hc_base_path" != "null" ]]; then
-        abs_path="${yaml_dir}/${_hc_base_path}/${_hc_chart_path}"
+        abs_path="${config_dir}/${_hc_base_path}/${_hc_chart_path}"
       else
-        abs_path="${yaml_dir}/projects/${_hc_domain}/${_hc_chart_path}"
+        abs_path="${config_dir}/projects/${_hc_domain}/${_hc_chart_path}"
       fi
 
       YAML_HELM_CHARTS+=("$chart_key")
@@ -150,22 +148,22 @@ _load_composite_helm_charts() {
 _load_flat_helm_charts() {
   local yaml="$1"
   local project_name="$2"
-  local project_dir="$3"
+  local config_dir="$3"
 
   local chart_count
-  chart_count="$(yq eval '.helm.charts | length // 0' "$yaml" 2>/dev/null || echo "0")"
+  chart_count="$(yq eval '.project.helm.charts | length // 0' "$yaml" 2>/dev/null || echo "0")"
   [[ "$chart_count" -eq 0 || "$chart_count" == "null" ]] && return 0
 
   local chart_idx=0
   local _fhc_name _fhc_path _fhc_registry
   while [[ $chart_idx -lt $chart_count ]]; do
-    _fhc_name="$(yq eval ".helm.charts[$chart_idx].name" "$yaml" 2>/dev/null || echo "")"
-    _fhc_path="$(yq eval ".helm.charts[$chart_idx].path" "$yaml" 2>/dev/null || echo "")"
-    _fhc_registry="$(yq eval ".helm.charts[$chart_idx].registry // \"\"" "$yaml" 2>/dev/null || echo "")"
+    _fhc_name="$(yq eval ".project.helm.charts[$chart_idx].name" "$yaml" 2>/dev/null || echo "")"
+    _fhc_path="$(yq eval ".project.helm.charts[$chart_idx].path" "$yaml" 2>/dev/null || echo "")"
+    _fhc_registry="$(yq eval ".project.helm.charts[$chart_idx].registry // \"\"" "$yaml" 2>/dev/null || echo "")"
 
     [[ -z "$_fhc_name" || "$_fhc_name" == "null" ]] && { chart_idx=$((chart_idx + 1)); continue; }
 
-    local abs_path="${project_dir}/${_fhc_path}"
+    local abs_path="${config_dir}/${_fhc_path}"
 
     YAML_HELM_CHARTS+=("$_fhc_name")
     _HELM_CHART_YAML_MAP["$_fhc_name"]="$yaml"
