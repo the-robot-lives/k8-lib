@@ -10,14 +10,17 @@ make install    # Installs to ~/.local/share/k8-lib
 
 ## Configuration
 
-All tools use a single **`k8-util-config.yaml`** file with an optional gitignored **`.k8-secrets.yaml`** for credentials.
+Tools use two config layers:
+
+- **`k8-util-config.yaml`** — Structural data (tiers, namespace overrides, timeouts, paths). Safe to commit.
+- **`.envrc.k8.dc`** — Scalar config + secrets via direnv-config (AWS, Docker, Helm, Infisical). Secrets layer is gitignored.
 
 ### Quick Start
 
 ```bash
 cp k8-util-config.yaml.example /path/to/project/k8-util-config.yaml
-cp .k8-secrets.yaml.example /path/to/project/.k8-secrets.yaml
-echo '.k8-secrets.yaml' >> /path/to/project/.gitignore
+cp .envrc.k8.dc.example /path/to/project/.envrc.k8.dc
+# Add to .envrc: source_env_if_exists .envrc.k8.dc
 ```
 
 ### Config Resolution
@@ -33,47 +36,31 @@ Every tool accepts `--config <path>` to specify the config file. Resolution orde
 
 ### k8-util-config.yaml (git-safe)
 
-All paths are relative to the config file's directory. Contains:
+Structural deployment topology. All paths are relative to the config file's directory:
 
 | Section | Description |
 |---------|-------------|
-| `aws` | AWS profile, region |
-| `docker` | Registry host |
-| `kubernetes` | Default, staging, infra namespaces |
-| `infisical` | Host, project ID (credentials in secrets file) |
-| `terraform` | State bucket, KMS, lock table |
-| `helm` | OCI registry, registry host |
-| `preferences` | Diff viewer, admin email |
-| `database` | DB name, user prefix, PgBouncer host |
-| `status_patterns` | grep patterns for cluster-status dashboard |
-| `infisical_bootstrap` | Infisical tier-0 bootstrap settings (namespace, secret names, site URL, DB/Redis hosts) |
-| `telemetry` | VM telemetry setup (environment, host type, OTel collector version, resource detectors) |
+| `paths` | Relative paths to helm dir, terraform dir, projects dir |
 | `tiers` | Deployment ordering (tier N completes before N+1) |
 | `namespace_overrides` | Chart-to-namespace overrides |
 | `timeout_overrides` | Per-chart Helm timeout overrides |
-| `paths` | Relative paths to helm dir, terraform dir, projects dir |
+| `helm_scan_dirs` | Directories to scan for Helm charts |
+| `chart_path_overrides` | Explicit chart-to-directory overrides |
+| `status_patterns` | grep patterns for cluster-status dashboard |
+| `nodepool_labels` | Node pool labels for cluster-layout |
+| `placement_exclude_pattern` | Pods excluded from placement analysis |
 
-### .k8-secrets.yaml (gitignored)
+### .envrc.k8.dc (direnv-config)
 
-Merged on top of the main config at load time. Contains credentials:
+Scalar config and credentials via direnv-config. Base layer has non-sensitive values (AWS profile, registry host, namespaces); secrets layer has credentials (Infisical client ID/secret, Helm registry password).
 
-```yaml
-infisical:
-  client_id: "..."
-  client_secret: "..."
-helm:
-  registry_user: "..."
-aws:
-  account_id: "..."
-```
-
-Environment variables (`K8_*`) always override values from both files.
+Tools resolve values via: env var → `dc get k8 <path>` → YAML fallback → hardcoded default.
 
 ## Library Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `bin/config-resolver.sh` | Unified config resolution, YAML accessors, secrets merge |
+| `bin/config-resolver.sh` | Unified config resolution, YAML accessors, dc integration |
 | `bin/config.sh` | Loads config (delegates to config-resolver.sh) |
 | `bin/common.sh` | Color output, logging helpers (`step`, `ok`, `warn`, `fail`, `die`) |
 | `bin/helm-common.sh` | Tier loading, namespace resolution, environment overlays, impact analysis |

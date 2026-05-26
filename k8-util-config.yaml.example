@@ -1,89 +1,21 @@
-# k8-util-config.yaml — Unified configuration for k8-lib devops tools
+# k8-util-config.yaml — Structural deployment config for k8-lib devops tools
 # Copy to your project root and customize. This file is safe to commit.
 #
-# SECURITY: All secrets belong in the secrets_file (see below).
-#   Do NOT put credentials, tokens, or keys in this file.
+# This file contains ONLY structural/topology data: tiers, namespace
+# overrides, timeouts, paths, and patterns.
+#
+# Scalar config (AWS, Docker, Helm, Infisical, etc.) lives in .envrc.k8.dc
+# via direnv-config. See .envrc.k8.dc.example for the template.
 #
 # PATHS: All path values are resolved relative to this file's directory.
-#
-# ENV OVERRIDE: Every value can be overridden by its K8_* environment
-#   variable (e.g., K8_AWS_PROFILE overrides aws.profile).
 
 apiVersion: k8-lib/v1
-
-# --- Secrets File (gitignored, merged at load time) -------------------------
-# Path relative to this file. Contains credentials (client IDs, secrets, etc.)
-# See .k8-secrets.yaml.example for the template.
-secrets_file: .k8-secrets.yaml
 
 # --- Paths (relative to this file) ------------------------------------------
 paths:
   helm_dir: helm                          # Helm charts root
   terraform_dir: terraform                # Terraform root
   projects_dir: repos/incubator/projects  # project.yaml discovery root
-
-# --- AWS ---------------------------------------------------------------------
-aws:
-  profile: terraformer        # AWS CLI profile name
-  # account_id: in secrets_file
-  region: us-east-1
-
-# --- Docker Registry ---------------------------------------------------------
-docker:
-  registry: ""                # Docker registry host (e.g., ops.noizu.com)
-
-  # Repos to build/push (image names). Typically auto-discovered from
-  # project.yaml files; list here only if not using project.yaml discovery.
-  # repos:
-  #   - my-api
-  #   - my-frontend
-
-  # Image-to-directory/dockerfile overrides. Only needed when the build
-  # context, Dockerfile, or stage config differs from defaults.
-  # mappings:
-  #   my-api:
-  #     dir: web                    # build context directory (default: image name)
-  #     dockerfile: Dockerfile.api  # Dockerfile path (default: Dockerfile)
-  #     single_stage: false         # skip --target flag (default: false)
-
-# --- Kubernetes --------------------------------------------------------------
-kubernetes:
-  namespace: default          # Default namespace
-  staging_namespace: staging  # Staging namespace
-  infra_namespace: infra      # Infrastructure namespace
-  app_prefix: app             # App label prefix for staging pod selectors
-
-# --- Infisical (Secrets Manager) ---------------------------------------------
-# client_id and client_secret go in .k8-secrets.yaml
-infisical:
-  host: ""                    # Infisical API URL
-  project_id: ""              # Infisical project ID
-
-# --- Terraform ---------------------------------------------------------------
-terraform:
-  state_bucket: ""            # S3 bucket for Terraform state
-  kms_alias: ""               # KMS alias for state encryption
-  lock_table: terraform-lock  # DynamoDB lock table
-  import_user: terraformer-import
-  import_policy_name: TerraformerImportPolicy
-
-# --- Helm OCI Registry -------------------------------------------------------
-helm:
-  oci_registry: ""            # e.g., oci://ghcr.io/your-org/helm-charts
-  registry_host: ghcr.io
-  # registry_user: in secrets_file
-
-# --- Preferences -------------------------------------------------------------
-preferences:
-  diff_viewer: code           # code | kdiff3 | opendiff | meld | terminal
-  admin_email: admin@example.com
-  credentials_link: ""        # Link to credentials vault (1Password, etc.)
-
-# --- Database ----------------------------------------------------------------
-database:
-  name: ""
-  user_prefix: app
-  pgbouncer_host: pgbouncer.default.svc.cluster.local
 
 # --- Cluster Status Patterns (grep -E regex) ---------------------------------
 status_patterns:
@@ -102,28 +34,6 @@ nodepool_labels:
 
 # --- Deploy One-Off -----------------------------------------------------------
 placement_exclude_pattern: "aws-node|kube-proxy|ebs-csi-node|efs-csi-node|signoz-node-agent|nginx-ingress"
-
-# --- Infisical Bootstrap (tier 0 chicken-and-egg secret creation) -------------
-infisical_bootstrap:
-  namespace: infisical             # K8s namespace for Infisical
-  secret_name: infisical-core-secrets
-  tls_secret_name: ""              # e.g., cloudflare-infisical.example.com-tls
-  site_url: ""                     # e.g., https://infisical.example.com
-  pg_user: infisical               # PostgreSQL user
-  pg_db: infisicalDB               # PostgreSQL database name
-  db_host: postgresql              # PostgreSQL service host (in-cluster)
-  db_port: 5432
-  redis_host: redis                # Redis service host (in-cluster)
-  redis_port: 6379
-
-# --- Telemetry Setup (EC2/VM otel-collector + fluent-bit) --------------------
-telemetry:
-  environment: production          # deployment.environment resource attribute
-  host_type: ec2                   # host.type resource attribute (ec2 | vm | bare-metal)
-  otelcol_version: "0.129.12"     # signoz-otel-collector release version
-  resource_detectors: "env, system, ec2"  # comma-separated OTel resource detectors
-  otelcol_memory_limit_mib: 512    # memory_limiter limit_mib
-  otelcol_spike_limit_mib: 128     # memory_limiter spike_limit_mib
 
 # --- Deployment Tiers ---------------------------------------------------------
 # Tier N completes before tier N+1 begins. Charts within a tier run in parallel.
@@ -160,3 +70,18 @@ namespace_overrides: {}
 timeout_overrides: {}
   # my-database: 30m
   # my-backend: 15m
+
+# --- Helm Scan Directories ---------------------------------------------------
+# Directories to scan for Helm charts (relative to this file).
+helm_scan_dirs:
+  - helm/platform
+  - helm/apps
+  - helm/data
+  - helm/observability
+  - helm/ai
+  - helm/creative
+  - helm/mail
+
+# --- Chart Path Overrides -----------------------------------------------------
+# Explicit chart-name → directory overrides (for non-standard locations).
+chart_path_overrides: {}
