@@ -9,8 +9,9 @@
 #   4. Git-root walker (CWD upward, checking each .git root)
 #   5. $K8_LIB_DIR/k8-util-config.yaml (library defaults)
 #
-# After resolution, merges optional secrets_file (relative to config dir).
-# Env vars always override YAML values.
+# Scalar config (AWS, Helm, etc.) is read from dc via _dc_get.
+# Structural data (tiers, namespaces) is read from the YAML via _cfg.
+# Env vars always override both sources.
 #
 # Requires: yq (https://github.com/mikefarah/yq/)
 # =============================================================================
@@ -25,26 +26,16 @@ _K8_CONFIG_RESOLVER_LOADED=1
 # CONSTANTS
 # =============================================================================
 _K8_CONFIG_FILENAME="k8-util-config.yaml"
-_K8_SECRETS_FILENAME=".k8-secrets.yaml"
 
 # =============================================================================
 # STATE (set by _resolve_config, read by accessors)
 # =============================================================================
 _K8_CONFIG_PATH=""        # path to the resolved config file
 _K8_CONFIG_DIR=""          # directory containing the config file
-_K8_MERGED_CONFIG=""       # path to merged (config + secrets) temp file
-_K8_MERGED_TMPFILE=""      # temp file to clean up on exit
+_K8_MERGED_CONFIG=""       # path to the config file (used by accessors)
 
 _K8_LIB_DIR="${K8_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-# =============================================================================
-# CLEANUP
-# =============================================================================
-_k8_config_cleanup() {
-  [[ -n "$_K8_MERGED_TMPFILE" && -f "$_K8_MERGED_TMPFILE" ]] && rm -f "$_K8_MERGED_TMPFILE"
-  _K8_MERGED_TMPFILE=""
-}
-trap '_k8_config_cleanup' EXIT
 
 # =============================================================================
 # YQ DEPENDENCY
@@ -75,39 +66,6 @@ _k8_find_config_in_git_roots() {
     dir="$(dirname "$dir")"
   done
   return 1
-}
-
-# =============================================================================
-# SECRETS MERGE
-#
-# Reads secrets_file from the config YAML. If the referenced file exists
-# (resolved relative to config dir), merges it on top of the main config
-# into a temp file. All _cfg calls read from the merged result.
-# =============================================================================
-_k8_merge_secrets() {
-  local config_path="$1"
-  local config_dir="$2"
-
-  _k8_require_yq
-
-  local secrets_rel
-  secrets_rel="$(yq eval '.secrets_file // ""' "$config_path" 2>/dev/null)"
-  [[ -z "$secrets_rel" || "$secrets_rel" == "null" ]] && {
-    _K8_MERGED_CONFIG="$config_path"
-    return 0
-  }
-
-  local secrets_path="$config_dir/$secrets_rel"
-  if [[ ! -f "$secrets_path" ]]; then
-    _K8_MERGED_CONFIG="$config_path"
-    return 0
-  fi
-
-  _K8_MERGED_TMPFILE="${TMPDIR:-/tmp}/k8-merged-config-$(openssl rand -hex 8).yaml"
-  yq eval-all 'select(fileIndex==0) * select(fileIndex==1)' \
-    "$config_path" "$secrets_path" > "$_K8_MERGED_TMPFILE" 2>/dev/null
-
-  _K8_MERGED_CONFIG="$_K8_MERGED_TMPFILE"
 }
 
 # =============================================================================
@@ -166,8 +124,7 @@ _resolve_config() {
   : "${INFRA_ROOT:=$_K8_CONFIG_DIR}"
   export INFRA_ROOT
 
-  # Merge secrets
-  _k8_merge_secrets "$_K8_CONFIG_PATH" "$_K8_CONFIG_DIR"
+  _K8_MERGED_CONFIG="$_K8_CONFIG_PATH"
 }
 
 # =============================================================================
@@ -203,6 +160,21 @@ _cfg_path() {
   fi
 }
 
+# Read a value from dc, falling back to YAML config.
+#   _dc_get <dc_config> <dc_path> [yaml_path] [default]
+#   _dc_get k8 aws.profile .aws.profile terraformer
+_dc_get() {
+  local dc_config="$1" dc_path="$2" yaml_path="${3:-}" default="${4:-}"
+  local val=""
+  if command -v dc &>/dev/null; then
+    val="$(dc get "$dc_config" "$dc_path" 2>/dev/null)"
+  fi
+  if [[ -z "$val" || "$val" == "null" ]] && [[ -n "$yaml_path" ]]; then
+    val="$(_cfg_default "$yaml_path" '')"
+  fi
+  echo "${val:-$default}"
+}
+
 # =============================================================================
 # BULK LOADERS
 # =============================================================================
@@ -213,48 +185,38 @@ _load_k8_vars() {
   _k8_require_yq
 
   # AWS
-  K8_AWS_PROFILE="${K8_AWS_PROFILE:-$(_cfg_default '.aws.profile' 'terraformer')}"
-  K8_AWS_ACCOUNT_ID="${K8_AWS_ACCOUNT_ID:-$(_cfg_default '.aws.account_id' '')}"
-  K8_AWS_REGION="${K8_AWS_REGION:-$(_cfg_default '.aws.region' 'us-east-1')}"
+  K8_AWS_PROFILE="${K8_AWS_PROFILE:-$(_dc_get k8 aws.profile .aws.profile 'terraformer')}"
+  K8_AWS_ACCOUNT_ID="${K8_AWS_ACCOUNT_ID:-$(_dc_get k8 aws.account_id .aws.account_id '')}"
+  K8_AWS_REGION="${K8_AWS_REGION:-$(_dc_get k8 aws.region .aws.region 'us-east-1')}"
 
   # Docker
-  K8_DOCKER_REGISTRY="${K8_DOCKER_REGISTRY:-$(_cfg_default '.docker.registry' '')}"
+  K8_DOCKER_REGISTRY="${K8_DOCKER_REGISTRY:-$(_dc_get k8 docker.registry .docker.registry '')}"
 
   # Kubernetes
-  K8_NAMESPACE="${K8_NAMESPACE:-$(_cfg_default '.kubernetes.namespace' 'default')}"
-  K8_STAGING_NAMESPACE="${K8_STAGING_NAMESPACE:-$(_cfg_default '.kubernetes.staging_namespace' 'staging')}"
-  K8_INFRA_NAMESPACE="${K8_INFRA_NAMESPACE:-$(_cfg_default '.kubernetes.infra_namespace' 'infra')}"
-  K8_APP_PREFIX="${K8_APP_PREFIX:-$(_cfg_default '.kubernetes.app_prefix' 'app')}"
+  K8_NAMESPACE="${K8_NAMESPACE:-$(_dc_get k8 kubernetes.namespace .kubernetes.namespace 'default')}"
+  K8_STAGING_NAMESPACE="${K8_STAGING_NAMESPACE:-$(_dc_get k8 kubernetes.staging_namespace .kubernetes.staging_namespace 'staging')}"
+  K8_INFRA_NAMESPACE="${K8_INFRA_NAMESPACE:-$(_dc_get k8 kubernetes.infra_namespace .kubernetes.infra_namespace 'infra')}"
 
   # Infisical
-  K8_INFISICAL_HOST="${K8_INFISICAL_HOST:-$(_cfg_default '.infisical.host' '')}"
-  K8_INFISICAL_PROJECT_ID="${K8_INFISICAL_PROJECT_ID:-$(_cfg_default '.infisical.project_id' '')}"
-  K8_INFISICAL_CLIENT_ID="${K8_INFISICAL_CLIENT_ID:-$(_cfg_default '.infisical.client_id' '')}"
-  K8_INFISICAL_CLIENT_SECRET="${K8_INFISICAL_CLIENT_SECRET:-$(_cfg_default '.infisical.client_secret' '')}"
+  K8_INFISICAL_HOST="${K8_INFISICAL_HOST:-$(_dc_get k8 infisical.host .infisical.host '')}"
+  K8_INFISICAL_PROJECT_ID="${K8_INFISICAL_PROJECT_ID:-$(_dc_get k8 infisical.project_id .infisical.project_id '')}"
+  K8_INFISICAL_CLIENT_ID="${K8_INFISICAL_CLIENT_ID:-$(_dc_get k8 infisical.client_id .infisical.client_id '')}"
+  K8_INFISICAL_CLIENT_SECRET="${K8_INFISICAL_CLIENT_SECRET:-$(_dc_get k8 infisical.client_secret .infisical.client_secret '')}"
 
   # Terraform
   K8_TF_DIR="${K8_TF_DIR:-$(_cfg_path '.paths.terraform_dir')}"
-  K8_TF_STATE_BUCKET="${K8_TF_STATE_BUCKET:-$(_cfg_default '.terraform.state_bucket' '')}"
-  K8_TF_KMS_ALIAS="${K8_TF_KMS_ALIAS:-$(_cfg_default '.terraform.kms_alias' '')}"
-  K8_TF_LOCK_TABLE="${K8_TF_LOCK_TABLE:-$(_cfg_default '.terraform.lock_table' 'terraform-lock')}"
 
   # Helm
-  K8_HELM_OCI_REGISTRY="${K8_HELM_OCI_REGISTRY:-$(_cfg_default '.helm.oci_registry' '')}"
-  K8_HELM_REGISTRY_HOST="${K8_HELM_REGISTRY_HOST:-$(_cfg_default '.helm.registry_host' 'ghcr.io')}"
-  K8_HELM_REGISTRY_USER="${K8_HELM_REGISTRY_USER:-$(_cfg_default '.helm.registry_user' '')}"
-  K8_HELM_REGISTRY_PASSWORD="${K8_HELM_REGISTRY_PASSWORD:-$(_cfg_default '.helm.registry_password' '')}"
+  K8_HELM_OCI_REGISTRY="${K8_HELM_OCI_REGISTRY:-$(_dc_get k8 helm.oci_registry .helm.oci_registry '')}"
+  K8_HELM_REGISTRY_HOST="${K8_HELM_REGISTRY_HOST:-$(_dc_get k8 helm.registry_host .helm.registry_host 'ghcr.io')}"
+  K8_HELM_REGISTRY_USER="${K8_HELM_REGISTRY_USER:-$(_dc_get k8 helm.registry_user .helm.registry_user '')}"
+  K8_HELM_REGISTRY_PASSWORD="${K8_HELM_REGISTRY_PASSWORD:-$(_dc_get k8 helm.registry_password .helm.registry_password '')}"
 
   # Preferences
-  K8_DIFF_VIEWER="${K8_DIFF_VIEWER:-$(_cfg_default '.preferences.diff_viewer' 'code')}"
-  K8_ADMIN_EMAIL="${K8_ADMIN_EMAIL:-$(_cfg_default '.preferences.admin_email' 'admin@example.com')}"
-  K8_CREDENTIALS_LINK="${K8_CREDENTIALS_LINK:-$(_cfg_default '.preferences.credentials_link' '')}"
+  K8_DIFF_VIEWER="${K8_DIFF_VIEWER:-$(_dc_get k8 preferences.diff_viewer .preferences.diff_viewer 'code')}"
+  K8_CREDENTIALS_LINK="${K8_CREDENTIALS_LINK:-$(_dc_get k8 preferences.credentials_link .preferences.credentials_link '')}"
 
-  # Database
-  K8_DB_NAME="${K8_DB_NAME:-$(_cfg_default '.database.name' '')}"
-  K8_DB_USER_PREFIX="${K8_DB_USER_PREFIX:-$(_cfg_default '.database.user_prefix' 'app')}"
-  K8_PGBOUNCER_HOST="${K8_PGBOUNCER_HOST:-$(_cfg_default '.database.pgbouncer_host' 'pgbouncer.default.svc.cluster.local')}"
-
-  # Status patterns
+  # Status patterns (structural — yaml-only, no dc equivalent)
   K8_STATUS_DB_PATTERN="${K8_STATUS_DB_PATTERN:-$(_cfg_default '.status_patterns.db' '(timescaledb|mysqldb|redis|valkey)')}"
   K8_STATUS_SEARCH_PATTERN="${K8_STATUS_SEARCH_PATTERN:-$(_cfg_default '.status_patterns.search' '(manticore|elasticsearch|opensearch)')}"
   K8_STATUS_APP_PATTERN="${K8_STATUS_APP_PATTERN:-$(_cfg_default '.status_patterns.app' '(backend|frontend|wordpress|api|admin)')}"
@@ -262,10 +224,10 @@ _load_k8_vars() {
   K8_STATUS_INFRA_PATTERN="${K8_STATUS_INFRA_PATTERN:-$(_cfg_default '.status_patterns.infra' '(infisical|signoz|karpenter|nginx-ingress|lb-controller|cert-manager)')}"
   K8_STATUS_JOB_PATTERN="${K8_STATUS_JOB_PATTERN:-$(_cfg_default '.status_patterns.job' '(indexer|migrat|job)')}"
 
-  # Nodepool labels
+  # Nodepool labels (structural — yaml-only)
   K8_NODEPOOL_LABELS="${K8_NODEPOOL_LABELS:-$(_cfg_default '.nodepool_labels | to_entries | map(.key + "=" + .value) | join(",")' '')}"
 
-  # Placement
+  # Placement (structural — yaml-only)
   K8_PLACEMENT_EXCLUDE_PATTERN="${K8_PLACEMENT_EXCLUDE_PATTERN:-$(_cfg_default '.placement_exclude_pattern' 'aws-node|kube-proxy|ebs-csi-node|efs-csi-node|signoz-node-agent|nginx-ingress')}"
 
   # Paths (resolve relative to config dir)
@@ -326,6 +288,47 @@ _load_timeout_overrides() {
     local val
     val="$(yq eval ".timeout_overrides.\"$key\"" "$_K8_MERGED_CONFIG" 2>/dev/null)"
     [[ -n "$val" && "$val" != "null" ]] && _TIMEOUT_OVERRIDES["$key"]="$val"
+  done
+}
+
+# Load chart path overrides into _CHART_PATH_OVERRIDES associative array.
+# Allows explicit path mapping for charts in non-standard locations.
+_load_chart_path_overrides() {
+  _k8_require_yq
+
+  declare -gA _CHART_PATH_OVERRIDES=()
+  local keys
+  keys="$(yq eval '.chart_path_overrides | keys | .[]' "$_K8_MERGED_CONFIG" 2>/dev/null || true)"
+
+  local key
+  for key in $keys; do
+    [[ -z "$key" ]] && continue
+    local val
+    val="$(yq eval ".chart_path_overrides.\"$key\"" "$_K8_MERGED_CONFIG" 2>/dev/null)"
+    [[ -n "$val" && "$val" != "null" ]] && _CHART_PATH_OVERRIDES["$key"]="$val"
+  done
+}
+
+# Load additional helm scan directories into _HELM_SCAN_DIRS array.
+# Each entry is resolved relative to the config file's directory.
+_load_helm_scan_dirs() {
+  _k8_require_yq
+
+  _HELM_SCAN_DIRS=()
+  local count
+  count="$(yq eval '.helm_scan_dirs | length' "$_K8_MERGED_CONFIG" 2>/dev/null || echo 0)"
+
+  local _i
+  for (( _i=0; _i < count; _i++ )); do
+    local dir
+    dir="$(yq eval -r ".helm_scan_dirs[$_i]" "$_K8_MERGED_CONFIG" 2>/dev/null)"
+    if [[ -n "$dir" && "$dir" != "null" ]]; then
+      if [[ "$dir" = /* ]]; then
+        _HELM_SCAN_DIRS+=("$dir")
+      else
+        _HELM_SCAN_DIRS+=("$_K8_CONFIG_DIR/$dir")
+      fi
+    fi
   done
 }
 

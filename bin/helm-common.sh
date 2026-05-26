@@ -19,15 +19,42 @@ HELM_DIR="$INFRA_ROOT/helm"
 # =============================================================================
 declare -A _CHART_DIRS=()
 
+# Load config-driven chart path overrides and scan dirs
+_load_chart_path_overrides
+_load_helm_scan_dirs
+
 _build_chart_index() {
   _CHART_DIRS=()
-  local chart_yaml
-  while IFS= read -r chart_yaml; do
-    local dir name
-    dir="$(dirname "$chart_yaml")"
-    name="$(basename "$dir")"
-    _CHART_DIRS["$name"]="$dir"
-  done < <(find "$HELM_DIR" -maxdepth 3 -name Chart.yaml -not -path "*/charts/*" 2>/dev/null)
+
+  # 1. Auto-discover from HELM_DIR and any additional scan dirs
+  local _scan_dirs=("$HELM_DIR")
+  if [[ ${#_HELM_SCAN_DIRS[@]} -gt 0 ]]; then
+    _scan_dirs+=("${_HELM_SCAN_DIRS[@]}")
+  fi
+
+  local _sd chart_yaml
+  for _sd in "${_scan_dirs[@]}"; do
+    [[ -d "$_sd" ]] || continue
+    while IFS= read -r chart_yaml; do
+      local dir name
+      dir="$(dirname "$chart_yaml")"
+      name="$(basename "$dir")"
+      [[ -z "${_CHART_DIRS[$name]+x}" ]] && _CHART_DIRS["$name"]="$dir"
+    done < <(find "$_sd" -maxdepth 3 -name Chart.yaml -not -path "*/charts/*" 2>/dev/null)
+  done
+
+  # 2. Apply explicit overrides (win over auto-discovered paths)
+  if [[ ${#_CHART_PATH_OVERRIDES[@]} -gt 0 ]]; then
+    local _key _val
+    for _key in "${!_CHART_PATH_OVERRIDES[@]}"; do
+      _val="${_CHART_PATH_OVERRIDES[$_key]}"
+      if [[ "$_val" = /* ]]; then
+        _CHART_DIRS["$_key"]="$_val"
+      else
+        _CHART_DIRS["$_key"]="$INFRA_ROOT/$_val"
+      fi
+    done
+  fi
 }
 _build_chart_index
 
