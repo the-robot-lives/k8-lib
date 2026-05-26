@@ -113,6 +113,10 @@ _load_composite_helm_charts() {
     chart_count="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .helm.charts | length // 0" "$yaml" 2>/dev/null || echo "0")"
     [[ "$chart_count" -eq 0 || "$chart_count" == "null" ]] && continue
 
+    # base_path override: allows projects outside the standard projects/<domain>/ convention
+    local _hc_base_path
+    _hc_base_path="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .base_path // \"\"" "$yaml" 2>/dev/null || echo "")"
+
     local chart_idx=0
     while [[ $chart_idx -lt $chart_count ]]; do
       _hc_chart_name="$(yq eval ".projects[] | select(.domain==\"$_hc_domain\") | .helm.charts[$chart_idx].name" "$yaml" 2>/dev/null || echo "")"
@@ -123,10 +127,14 @@ _load_composite_helm_charts() {
 
       local chart_key="${_hc_domain}/${_hc_chart_name}"
 
-      # Resolve absolute path: for composite projects, domain dirs live under projects/<domain>/
       local yaml_dir
       yaml_dir="$(dirname "$yaml")"
-      local abs_path="${yaml_dir}/projects/${_hc_domain}/${_hc_chart_path}"
+      local abs_path
+      if [[ -n "$_hc_base_path" && "$_hc_base_path" != "null" ]]; then
+        abs_path="${yaml_dir}/${_hc_base_path}/${_hc_chart_path}"
+      else
+        abs_path="${yaml_dir}/projects/${_hc_domain}/${_hc_chart_path}"
+      fi
 
       YAML_HELM_CHARTS+=("$chart_key")
       _HELM_CHART_YAML_MAP["$chart_key"]="$yaml"

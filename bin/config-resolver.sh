@@ -103,7 +103,7 @@ _k8_merge_secrets() {
     return 0
   fi
 
-  _K8_MERGED_TMPFILE="$(mktemp "${TMPDIR:-/tmp}/k8-merged-config.XXXXXX.yaml")"
+  _K8_MERGED_TMPFILE="${TMPDIR:-/tmp}/k8-merged-config-$(openssl rand -hex 8).yaml"
   yq eval-all 'select(fileIndex==0) * select(fileIndex==1)' \
     "$config_path" "$secrets_path" > "$_K8_MERGED_TMPFILE" 2>/dev/null
 
@@ -242,6 +242,7 @@ _load_k8_vars() {
   K8_HELM_OCI_REGISTRY="${K8_HELM_OCI_REGISTRY:-$(_cfg_default '.helm.oci_registry' '')}"
   K8_HELM_REGISTRY_HOST="${K8_HELM_REGISTRY_HOST:-$(_cfg_default '.helm.registry_host' 'ghcr.io')}"
   K8_HELM_REGISTRY_USER="${K8_HELM_REGISTRY_USER:-$(_cfg_default '.helm.registry_user' '')}"
+  K8_HELM_REGISTRY_PASSWORD="${K8_HELM_REGISTRY_PASSWORD:-$(_cfg_default '.helm.registry_password' '')}"
 
   # Preferences
   K8_DIFF_VIEWER="${K8_DIFF_VIEWER:-$(_cfg_default '.preferences.diff_viewer' 'code')}"

@@ -125,6 +125,9 @@ _load_composite_docker_services() {
     svc_count="$(yq eval ".projects[] | select(.domain==\"$domain\") | .services | length // 0" "$yaml" 2>/dev/null || echo "0")"
     [[ "$svc_count" -eq 0 || "$svc_count" == "null" ]] && continue
 
+    local _dc_base_path
+    _dc_base_path="$(yq eval ".projects[] | select(.domain==\"$domain\") | .base_path // \"\"" "$yaml" 2>/dev/null || echo "")"
+
     local svc_idx=0
     while [[ $svc_idx -lt $svc_count ]]; do
       local svc_base=".projects[] | select(.domain==\"$domain\") | .services[$svc_idx]"
@@ -141,7 +144,12 @@ _load_composite_docker_services() {
       [[ "$svc_auto_detect" == "false" ]] || true
 
       local image_key="${domain}/${svc_name}"
-      local abs_context="${yaml_dir}/projects/${domain}"
+      local abs_context
+      if [[ -n "$_dc_base_path" && "$_dc_base_path" != "null" ]]; then
+        abs_context="${yaml_dir}/${_dc_base_path}"
+      else
+        abs_context="${yaml_dir}/projects/${domain}"
+      fi
       [[ -n "$svc_context" && "$svc_context" != "null" ]] && abs_context="${abs_context}/${svc_context}"
 
       DOCKER_REPOS+=("$image_key")
