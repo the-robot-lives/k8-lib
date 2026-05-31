@@ -105,6 +105,13 @@ _load_composite_helm_charts() {
   local config_dir="$3"
   local _hc_domain _hc_chart_name _hc_chart_path _hc_chart_registry
 
+  # Resolve composite project root via PROJECTS_DIR + project.name
+  # e.g., PROJECTS_DIR=<root>/repos, project.name=incubator → <root>/repos/incubator
+  local project_root="${config_dir}"
+  if [[ -n "${PROJECTS_DIR:-}" && -n "$project_name" && "$project_name" != "null" ]]; then
+    project_root="${PROJECTS_DIR}/${project_name}"
+  fi
+
   local domains
   domains="$(yq eval '.project.projects[] | .domain' "$yaml" 2>/dev/null || true)"
 
@@ -129,9 +136,9 @@ _load_composite_helm_charts() {
 
       local abs_path
       if [[ -n "$_hc_base_path" && "$_hc_base_path" != "null" ]]; then
-        abs_path="${config_dir}/${_hc_base_path}/${_hc_chart_path}"
+        abs_path="${project_root}/${_hc_base_path}/${_hc_chart_path}"
       else
-        abs_path="${config_dir}/projects/${_hc_domain}/${_hc_chart_path}"
+        abs_path="${project_root}/projects/${_hc_domain}/${_hc_chart_path}"
       fi
 
       YAML_HELM_CHARTS+=("$chart_key")

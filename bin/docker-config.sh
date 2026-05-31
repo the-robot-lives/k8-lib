@@ -93,6 +93,7 @@ declare -A _DOCKER_DOCKERFILE_MAP
 declare -A _DOCKER_SINGLE_STAGE_MAP
 declare -A _DOCKER_REGISTRY_PATH_MAP
 declare -A _DOCKER_BUILD_ARGS_MAP
+declare -A _DOCKER_PLATFORM_MAP
 
 # =============================================================================
 # YAML-based auto-discovery from merged infra-config.yaml
@@ -187,6 +188,10 @@ _load_composite_docker_services() {
         [[ -n "$args_str" ]] && _DOCKER_BUILD_ARGS_MAP["$image_key"]="$args_str"
       fi
 
+      local svc_platform
+      svc_platform="$(yq eval "${svc_base}.platform // \"\"" "$yaml" 2>/dev/null || echo "")"
+      [[ -n "$svc_platform" && "$svc_platform" != "null" ]] && _DOCKER_PLATFORM_MAP["$image_key"]="$svc_platform"
+
       svc_idx=$((svc_idx + 1))
     done
   done
@@ -235,6 +240,10 @@ _load_flat_docker_services() {
       done < <(yq eval "${img_base}.build_args | to_entries | .[] | .key + \"=\" + .value" "$yaml" 2>/dev/null || true)
       [[ -n "$args_str" ]] && _DOCKER_BUILD_ARGS_MAP["$img_name"]="$args_str"
     fi
+
+    local img_platform
+    img_platform="$(yq eval "${img_base}.platform // \"\"" "$yaml" 2>/dev/null || echo "")"
+    [[ -n "$img_platform" && "$img_platform" != "null" ]] && _DOCKER_PLATFORM_MAP["$img_name"]="$img_platform"
 
     img_idx=$((img_idx + 1))
   done
@@ -351,6 +360,18 @@ _dockerfile_for_image() {
   local image="$1"
   if [[ -n "${_DOCKER_DOCKERFILE_MAP[$image]+x}" ]]; then
     echo "${_DOCKER_DOCKERFILE_MAP[$image]}"
+  else
+    echo ""
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# _platform_for_image — return per-image platform override, or empty string
+# -----------------------------------------------------------------------------
+_platform_for_image() {
+  local image="$1"
+  if [[ -n "${_DOCKER_PLATFORM_MAP[$image]+x}" ]]; then
+    echo "${_DOCKER_PLATFORM_MAP[$image]}"
   else
     echo ""
   fi

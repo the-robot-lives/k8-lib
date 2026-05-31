@@ -84,7 +84,10 @@ _resolve_config() {
       echo "   (specified via --config flag or K8_CONFIG env var)" >&2
       exit 1
     fi
-    candidate="$K8_CONFIG"
+    # Validate it's actually an infra-config YAML, not a kubeconfig or other file
+    if head -5 "$K8_CONFIG" 2>/dev/null | grep -q 'apiVersion: k8-lib/'; then
+      candidate="$K8_CONFIG"
+    fi
   fi
 
   # 2. $INFRA_ROOT/infra-config.yaml
