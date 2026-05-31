@@ -2,12 +2,12 @@
 # =============================================================================
 # config-resolver.sh — Unified config resolution for k8-lib tools
 #
-# Resolves infra-config.yaml via (in order):
+# Resolves .infra-config.yaml via (in order):
 #   1. --config <path> flag (pre-parsed into K8_CONFIG before sourcing)
 #   2. K8_CONFIG environment variable
-#   3. $INFRA_ROOT/infra-config.yaml
+#   3. $INFRA_ROOT/.infra-config.yaml (or legacy infra-config.yaml)
 #   4. Git-root walker (CWD upward, checking each .git root)
-#   5. $K8_LIB_DIR/infra-config.yaml (library defaults)
+#   5. $K8_LIB_DIR/.infra-config.yaml (or legacy infra-config.yaml)
 #
 # Scalar config (AWS, Helm, etc.) is read from dc via _dc_get.
 # Structural data (tiers, namespaces) is read from the YAML via _cfg.
@@ -25,7 +25,8 @@ _K8_CONFIG_RESOLVER_LOADED=1
 # =============================================================================
 # CONSTANTS
 # =============================================================================
-_K8_CONFIG_FILENAME="infra-config.yaml"
+_K8_CONFIG_FILENAME=".infra-config.yaml"
+_K8_CONFIG_FILENAME_LEGACY="infra-config.yaml"
 
 # =============================================================================
 # STATE (set by _resolve_config, read by accessors)
@@ -62,6 +63,10 @@ _k8_find_config_in_git_roots() {
         echo "$dir/$_K8_CONFIG_FILENAME"
         return 0
       fi
+      if [[ -f "$dir/$_K8_CONFIG_FILENAME_LEGACY" ]]; then
+        echo "$dir/$_K8_CONFIG_FILENAME_LEGACY"
+        return 0
+      fi
     fi
     dir="$(dirname "$dir")"
   done
@@ -90,9 +95,13 @@ _resolve_config() {
     fi
   fi
 
-  # 2. $INFRA_ROOT/infra-config.yaml
-  if [[ -z "$candidate" && -n "${INFRA_ROOT:-}" && -f "$INFRA_ROOT/$_K8_CONFIG_FILENAME" ]]; then
-    candidate="$INFRA_ROOT/$_K8_CONFIG_FILENAME"
+  # 2. $INFRA_ROOT/.infra-config.yaml (or legacy infra-config.yaml)
+  if [[ -z "$candidate" && -n "${INFRA_ROOT:-}" ]]; then
+    if [[ -f "$INFRA_ROOT/$_K8_CONFIG_FILENAME" ]]; then
+      candidate="$INFRA_ROOT/$_K8_CONFIG_FILENAME"
+    elif [[ -f "$INFRA_ROOT/$_K8_CONFIG_FILENAME_LEGACY" ]]; then
+      candidate="$INFRA_ROOT/$_K8_CONFIG_FILENAME_LEGACY"
+    fi
   fi
 
   # 3. Git-root walker
@@ -101,8 +110,12 @@ _resolve_config() {
   fi
 
   # 4. K8_LIB_DIR fallback (library defaults)
-  if [[ -z "$candidate" && -f "$_K8_LIB_DIR/$_K8_CONFIG_FILENAME" ]]; then
-    candidate="$_K8_LIB_DIR/$_K8_CONFIG_FILENAME"
+  if [[ -z "$candidate" ]]; then
+    if [[ -f "$_K8_LIB_DIR/$_K8_CONFIG_FILENAME" ]]; then
+      candidate="$_K8_LIB_DIR/$_K8_CONFIG_FILENAME"
+    elif [[ -f "$_K8_LIB_DIR/$_K8_CONFIG_FILENAME_LEGACY" ]]; then
+      candidate="$_K8_LIB_DIR/$_K8_CONFIG_FILENAME_LEGACY"
+    fi
   fi
 
   # 5. No config found at all

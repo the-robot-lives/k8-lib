@@ -5,7 +5,7 @@
 # Expects: INFRA_ROOT set before sourcing
 # =============================================================================
 
-HELM_DIR="$INFRA_ROOT/helm"
+HELM_DIR="${HELM_DIR:-$INFRA_ROOT/kubernetes/helm}"
 
 # =============================================================================
 # Chart path resolver — supports categorical subdirectories
