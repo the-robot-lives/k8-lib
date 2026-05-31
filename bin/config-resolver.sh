@@ -176,6 +176,60 @@ _cfg_path() {
   fi
 }
 
+_dc_yq_path_expr() {
+  local dc_path="$1"
+  local expr="" part
+  IFS='.' read -ra _dc_path_parts <<< "$dc_path"
+  for part in "${_dc_path_parts[@]}"; do
+    if [[ "$part" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      expr+=".${part}"
+    else
+      part="${part//\"/\\\"}"
+      expr+=".\"${part}\""
+    fi
+  done
+  echo "$expr"
+}
+
+_dc_file_get() {
+  local dc_config="$1" dc_path="$2"
+  command -v yq &>/dev/null || return 0
+  [[ -n "${_K8_CONFIG_DIR:-}" ]] || return 0
+
+  local candidates=()
+  [[ -f "${_K8_CONFIG_DIR}/.envrc.${dc_config}.dc" ]] && candidates+=("${_K8_CONFIG_DIR}/.envrc.${dc_config}.dc")
+  [[ -f "${_K8_CONFIG_DIR}/.envrc.dc" ]] && candidates+=("${_K8_CONFIG_DIR}/.envrc.dc")
+  (( ${#candidates[@]} > 0 )) || return 0
+
+  local expr val
+  expr="$(_dc_yq_path_expr "$dc_path")"
+  val="$(
+    awk -v wanted="$dc_config" '
+      function config_name(line, parts, n, i, token) {
+        n = split(line, parts, /[[:space:]]+/)
+        for (i = 2; i <= n; i++) {
+          token = parts[i]
+          if (token ~ /^<</) break
+          if (token == "--layer" || token == "--replace-key") { i++; continue }
+          if (token ~ /^--/) continue
+          return token
+        }
+        return ""
+      }
+      /^dc_yaml[[:space:]]/ {
+        in_block = (config_name($0) == wanted)
+        if (in_block) print "---"
+        next
+      }
+      in_block && /^YAML$/ { in_block = 0; next }
+      in_block { print }
+    ' "${candidates[@]}" \
+      | yq ea -r ". as \$item ireduce ({}; . * \$item) | ${expr} // \"\"" - 2>/dev/null || true
+  )"
+  [[ "$val" == "null" ]] && val=""
+  echo "$val"
+}
+
 # Read a value from dc, falling back to YAML config.
 #   _dc_get <dc_config> <dc_path> [yaml_path] [default]
 #   _dc_get k8 aws.profile .aws.profile terraformer
@@ -184,6 +238,9 @@ _dc_get() {
   local val=""
   if command -v dc &>/dev/null; then
     val="$(dc get "$dc_config" "$dc_path" 2>/dev/null)"
+  fi
+  if [[ -z "$val" || "$val" == "null" ]]; then
+    val="$(_dc_file_get "$dc_config" "$dc_path")"
   fi
   if [[ -z "$val" || "$val" == "null" ]] && [[ -n "$yaml_path" ]]; then
     val="$(_cfg_default "$yaml_path" '')"
