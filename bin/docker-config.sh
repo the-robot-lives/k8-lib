@@ -402,6 +402,16 @@ normalize_repo_name() {
   for repo in "${DOCKER_REPOS[@]}"; do
     [[ "$repo" == "$image" ]] && echo "$image" && return 0
   done
+  # Domain fallback: "<domain>" resolves to "<domain>/<service>" when the
+  # domain has exactly one service (composite single-service convenience).
+  local _match="" _count=0
+  for repo in "${DOCKER_REPOS[@]}"; do
+    if [[ "$repo" == "${name}/"* ]]; then
+      _match="$repo"
+      _count=$((_count + 1))
+    fi
+  done
+  [[ $_count -eq 1 ]] && { echo "$_match"; return 0; }
   return 1
 }
 
