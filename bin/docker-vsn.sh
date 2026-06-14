@@ -90,50 +90,91 @@ resolve_vsn() {
   else
     # ------------------------------------------------------------------
     # Path 2: auto-detect from most recent build
-    #   Try git SHA first, then fall back to :latest tag
+    #   Try git SHA first, then fall back to :latest tag.
+    #   In REMOTE_MODE, check the registry manifest instead of local.
     # ------------------------------------------------------------------
     local image_id=""
     local detect_source=""
 
-    # 2a: Try git SHA
-    local git_sha
-    git_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+    if [[ "${REMOTE_MODE:-false}" == "true" ]]; then
+      # Remote mode: probe registry for edge tag directly
+      local git_sha
+      git_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "")
 
-    if [[ -n "$git_sha" ]]; then
-      local sha_image="${registry}/${image}:${git_sha}"
-      if docker image inspect "${sha_image}" &>/dev/null; then
-        image_id=$(docker image inspect "${sha_image}" --format '{{.Id}}' 2>/dev/null)
-        detect_source="commit ${git_sha}"
+      # Try to find an edge tag on the registry by probing common patterns
+      local _edge_tag=""
+      for _try_tag in "v1.0.edge" "v0.1.edge"; do
+        if docker manifest inspect "${registry}/${image}:${_try_tag}" &>/dev/null 2>&1; then
+          _edge_tag="$_try_tag"
+          break
+        fi
+      done
+
+      if [[ -n "$_edge_tag" ]]; then
+        # Parse the edge tag directly
+        local _stripped="${_edge_tag#v}"
+        if [[ "$_stripped" =~ ^([0-9]+)\.([0-9]+)\.edge(-(.+))?$ ]]; then
+          VSN_MAJOR="${BASH_REMATCH[1]}"
+          VSN_MINOR="${BASH_REMATCH[2]}"
+          if [[ -n "${BASH_REMATCH[4]}" ]]; then
+            BUILD_ENV="${BASH_REMATCH[4]}"
+            ENV_SUFFIX="-${BUILD_ENV}"
+          else
+            BUILD_ENV="prod"
+            ENV_SUFFIX=""
+          fi
+          detect_source="remote:${_edge_tag}"
+        fi
       fi
-    fi
 
-    # 2b: Fall back to :latest
-    if [[ -z "$image_id" ]]; then
-      local latest_image="${registry}/${image}:latest"
-      if docker image inspect "${latest_image}" &>/dev/null; then
-        image_id=$(docker image inspect "${latest_image}" --format '{{.Id}}' 2>/dev/null)
-        detect_source="latest"
+      if [[ -z "$VSN_MAJOR" ]]; then
+        echo "❌  No edge tag found in registry for ${image}"
+        echo "   Run docker-build --push ${image} first"
+        return 1
       fi
-    fi
+    else
+      # Local mode: inspect local docker images
+      # 2a: Try git SHA
+      local git_sha
+      git_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "")
 
-    if [[ -z "$image_id" ]]; then
-      echo "❌  No built image found for ${image} (tried${git_sha:+ git:${git_sha},} latest)"
-      echo "   Run ./docker-build.sh first"
-      return 1
-    fi
+      if [[ -n "$git_sha" ]]; then
+        local sha_image="${registry}/${image}:${git_sha}"
+        if docker image inspect "${sha_image}" &>/dev/null; then
+          image_id=$(docker image inspect "${sha_image}" --format '{{.Id}}' 2>/dev/null)
+          detect_source="commit ${git_sha}"
+        fi
+      fi
 
-    # Scan tags on the resolved image
-    if ! _scan_tags_for_vsn "$registry" "$image" "$image_id"; then
-      echo "⚠️  No vMajor.Minor.edge tag found on ${detect_source} build"
-      echo "   Found tags: ${RECENT_TAGS}"
-      return 1
+      # 2b: Fall back to :latest
+      if [[ -z "$image_id" ]]; then
+        local latest_image="${registry}/${image}:latest"
+        if docker image inspect "${latest_image}" &>/dev/null; then
+          image_id=$(docker image inspect "${latest_image}" --format '{{.Id}}' 2>/dev/null)
+          detect_source="latest"
+        fi
+      fi
+
+      if [[ -z "$image_id" ]]; then
+        echo "❌  No built image found for ${image} (tried${git_sha:+ git:${git_sha},} latest)"
+        echo "   Run ./docker-build.sh first"
+        return 1
+      fi
+
+      # Scan tags on the resolved image
+      if ! _scan_tags_for_vsn "$registry" "$image" "$image_id"; then
+        echo "⚠️  No vMajor.Minor.edge tag found on ${detect_source} build"
+        echo "   Found tags: ${RECENT_TAGS}"
+        return 1
+      fi
     fi
   fi
 
   # Set derived outputs
   PLACEHOLDER_TAG="${registry}/${image}:v${VSN_MAJOR}.${VSN_MINOR}.edge${ENV_SUFFIX}"
 
-  VERSION_KEY="${image}-v${VSN_MAJOR}.${VSN_MINOR}.edge"
+  local _sanitized_image="${image//\//-}"
+  VERSION_KEY="${_sanitized_image}-v${VSN_MAJOR}.${VSN_MINOR}.edge"
   VERSION_TYPE_KEY="${VERSION_KEY}${ENV_SUFFIX}"
   return 0
 }

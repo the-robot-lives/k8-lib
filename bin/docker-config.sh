@@ -547,6 +547,96 @@ get_unpushed_builds() {
   fi
 }
 
+# =============================================================================
+# Infisical preflight — resolve config, authenticate, resolve project ID.
+#
+# On success sets: INFISICAL_HOST, API_TOKEN, PROJECT_ID, CF_HEADERS,
+#                  EKS_OPERATOR_CLIENT_ID, EKS_OPERATOR_CLIENT_SECRET
+# On failure: prints diagnostic and returns 1.
+#
+# Usage: _infisical_preflight || exit 1
+# =============================================================================
+_infisical_preflight() {
+  INFISICAL_HOST="${INFISICAL_HOST:-${K8_INFISICAL_HOST:-$(_dc_get secrets infisical.host '' '')}}"
+  local project_slug="${INFISICAL_PROJECT_SLUG:-${K8_INFISICAL_PROJECT_SLUG:-$(_dc_get secrets infisical.project_slug '' '')}}"
+  PROJECT_ID="${INFISICAL_PROJECT_ID:-${K8_INFISICAL_PROJECT_ID:-}}"
+  local env_slug="${INFISICAL_ENV:-prod}"
+
+  EKS_OPERATOR_CLIENT_ID="${EKS_OPERATOR_CLIENT_ID:-${K8_INFISICAL_CLIENT_ID:-$(_dc_get secrets operator.client_id '' '')}}"
+  EKS_OPERATOR_CLIENT_SECRET="${EKS_OPERATOR_CLIENT_SECRET:-${K8_INFISICAL_CLIENT_SECRET:-$(_dc_get secrets operator.client_secret '' '')}}"
+
+  # --- Validate config ---
+  if [[ -z "$INFISICAL_HOST" ]]; then
+    echo "❌  Infisical preflight: INFISICAL_HOST is not set"
+    echo "   source .envrc or configure k8.infisical.host / secrets.infisical.host"
+    return 1
+  fi
+  INFISICAL_HOST="${INFISICAL_HOST%/api}"
+  INFISICAL_HOST="${INFISICAL_HOST%/}"
+
+  if [[ -z "$EKS_OPERATOR_CLIENT_ID" || -z "$EKS_OPERATOR_CLIENT_SECRET" ]]; then
+    echo "❌  Infisical preflight: operator credentials not set"
+    echo "   EKS_OPERATOR_CLIENT_ID and EKS_OPERATOR_CLIENT_SECRET are required"
+    return 1
+  fi
+
+  # --- CF Access headers ---
+  local cf_id="${CF_ACCESS_CLIENT_ID:-$(_dc_get cf access.client_id '' '')}"
+  local cf_secret="${CF_ACCESS_CLIENT_SECRET:-$(_dc_get cf access.client_secret '' '')}"
+  CF_HEADERS=()
+  if [[ -n "$cf_id" && -n "$cf_secret" ]]; then
+    CF_HEADERS=(-H "CF-Access-Client-Id: ${cf_id}" -H "CF-Access-Client-Secret: ${cf_secret}")
+  fi
+
+  # --- Auth ---
+  echo "🔑  Infisical preflight: authenticating..."
+  local login_body login_err login_http
+  login_body="$(mktemp "${TMPDIR:-/tmp}/infisical-preflight.XXXXXX")"
+  login_err="$(mktemp "${TMPDIR:-/tmp}/infisical-preflight.err.XXXXXX")"
+  login_http=$(curl -sS ${CF_HEADERS[@]+"${CF_HEADERS[@]}"} -o "$login_body" -w "%{http_code}" \
+    -X POST "${INFISICAL_HOST}/api/v1/auth/universal-auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"clientId\":\"${EKS_OPERATOR_CLIENT_ID}\",\"clientSecret\":\"${EKS_OPERATOR_CLIENT_SECRET}\"}" \
+    2>"$login_err" || true)
+  local login_response login_error
+  login_response="$(cat "$login_body" 2>/dev/null || true)"
+  login_error="$(cat "$login_err" 2>/dev/null || true)"
+  rm -f "$login_body" "$login_err"
+
+  API_TOKEN=$(echo "$login_response" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4 || true)
+  if [[ -z "$API_TOKEN" ]]; then
+    echo "❌  Infisical preflight: authentication failed (HTTP ${login_http:-?})"
+    [[ -n "$login_error" ]] && echo "   $login_error"
+    return 1
+  fi
+  echo "  ✅  Authenticated"
+
+  # --- Resolve project ID ---
+  if [[ -z "$PROJECT_ID" && -n "${project_slug:-}" ]]; then
+    local proj_body proj_http
+    proj_body="$(mktemp "${TMPDIR:-/tmp}/infisical-preflight-proj.XXXXXX")"
+    proj_http=$(curl -sS ${CF_HEADERS[@]+"${CF_HEADERS[@]}"} -o "$proj_body" -w "%{http_code}" \
+      -X GET "${INFISICAL_HOST}/api/v1/projects/slug/${project_slug}" \
+      -H "Authorization: Bearer ${API_TOKEN}" \
+      -H "Content-Type: application/json" 2>/dev/null || true)
+    local proj_response
+    proj_response="$(cat "$proj_body" 2>/dev/null || true)"
+    rm -f "$proj_body"
+    if command -v jq &>/dev/null; then
+      PROJECT_ID="$(echo "$proj_response" | jq -r '.id // .project.id // empty' 2>/dev/null || true)"
+    else
+      PROJECT_ID="$(echo "$proj_response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    fi
+  fi
+  if [[ -z "$PROJECT_ID" ]]; then
+    echo "❌  Infisical preflight: could not resolve project ID"
+    echo "   Project slug: ${project_slug:-<unset>}"
+    return 1
+  fi
+  echo "  ✅  Project: ${project_slug:-$PROJECT_ID}"
+  return 0
+}
+
 # --- Seconds since last build (999999 if none) ---
 seconds_since_last_build() {
   load_build_state
