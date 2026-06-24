@@ -368,6 +368,23 @@ _load_timeout_overrides() {
   done
 }
 
+# Load the charts that should keep --reuse-values (opt out of the --reset-values
+# default) into the _HELM_PRESERVE_VALUES array. Source: .helm_preserve_values
+# (a YAML list of chart names).
+_load_helm_preserve_values() {
+  _k8_require_yq
+
+  declare -ga _HELM_PRESERVE_VALUES=()
+  local vals
+  vals="$(yq eval '.helm_preserve_values[]' "$_K8_MERGED_CONFIG" 2>/dev/null || true)"
+
+  local v
+  for v in $vals; do
+    [[ -z "$v" || "$v" == "null" ]] && continue
+    _HELM_PRESERVE_VALUES+=("$v")
+  done
+}
+
 # Load chart path overrides into _CHART_PATH_OVERRIDES associative array.
 # Allows explicit path mapping for charts in non-standard locations.
 _load_chart_path_overrides() {

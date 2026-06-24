@@ -210,6 +210,26 @@ _get_timeout() {
 }
 
 # =============================================================================
+# Chart → values strategy (--reset-values vs --reuse-values)
+#
+# helm-upgrade resets values by default so values.yaml is authoritative (a plain
+# helm upgrade otherwise reuses prior values and silently ignores new image tags
+# / config). Charts in .helm_preserve_values keep --reuse-values so runtime/
+# generated state (passwords, etc.) not captured in values.yaml survives.
+# =============================================================================
+declare -a _HELM_PRESERVE_VALUES=()
+_load_helm_preserve_values
+
+# Returns 0 (true) if $chart should preserve runtime values (--reuse-values).
+_should_preserve_values() {
+  local chart="$1" c
+  for c in "${_HELM_PRESERVE_VALUES[@]}"; do
+    [[ "$c" == "$chart" ]] && return 0
+  done
+  return 1
+}
+
+# =============================================================================
 # Array membership check
 #
 # Returns 0 (true) if $1 appears anywhere in the remaining arguments.
