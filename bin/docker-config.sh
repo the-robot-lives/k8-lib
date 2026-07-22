@@ -17,6 +17,8 @@
 # =============================================================================
 
 _DOCKER_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_DOCKER_CFG_DIR/bash-runtime.sh"
+_k8_require_bash4 "$0" "$@"
 
 # Load infra-config.yaml (sets K8_DOCKER_REGISTRY, etc.)
 source "$_DOCKER_CFG_DIR/config.sh"

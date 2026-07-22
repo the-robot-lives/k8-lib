@@ -5,6 +5,10 @@
 # Expects: INFRA_ROOT set before sourcing
 # =============================================================================
 
+_HELM_COMMON_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_HELM_COMMON_LIB_DIR/bash-runtime.sh"
+_k8_require_bash4 "$0" "$@"
+
 HELM_DIR="${HELM_DIR:-$INFRA_ROOT/kubernetes/helm}"
 
 # =============================================================================

@@ -16,6 +16,10 @@
 #   Flat projects:      .project.helm.charts[]
 # =============================================================================
 
+_HELM_PUBLISH_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_HELM_PUBLISH_CFG_DIR/bash-runtime.sh"
+_k8_require_bash4 "$0" "$@"
+
 [[ "${_HELM_PUBLISH_CONFIG_LOADED:-0}" -eq 1 ]] && return 0
 _HELM_PUBLISH_CONFIG_LOADED=1
 
