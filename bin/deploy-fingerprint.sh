@@ -95,7 +95,7 @@ _deploy_fp_path_excluded() {
 _deploy_fp_emit_files() {
   local context="$1" root rel_context rel abs
   root="$(git -C "${INFRA_ROOT:-.}" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [[ -n "$root" && "$context" == "$root"* ]]; then
+  if [[ -n "$root" && ( "$context" == "$root" || "$context" == "$root/"* ) ]]; then
     if [[ "$context" == "$root" ]]; then
       rel_context="."
     else
@@ -165,29 +165,50 @@ deploy_fingerprint_image_keys_for_chart() {
 }
 
 deploy_fingerprint_image_checksum() {
-  local image="$1" context_raw context mtime_file checksum
+  local image="$1" context_raw context tmp_dir abs_file rel_file mode_file hash_file mtime_file checksum
   context_raw="$(get_repo_dir "$image")"
   [[ -d "$context_raw" ]] || return 1
   context="$(cd "$context_raw" && pwd -P)"
-  mtime_file="$(mktemp)"
+  tmp_dir="$(mktemp -d)"
+  abs_file="$tmp_dir/files"
+  rel_file="$tmp_dir/rels"
+  mode_file="$tmp_dir/modes"
+  hash_file="$tmp_dir/hashes"
+  mtime_file="$tmp_dir/mtimes"
   DEPLOY_FP_CONTEXT="$context"
   DEPLOY_FP_CHECKSUM=""
   DEPLOY_FP_LATEST_MTIME=0
   DEPLOY_FP_LATEST_FILE=""
   DEPLOY_FP_FILE_COUNT=0
 
-  checksum="$(_deploy_fp_emit_files "$context" |
+  _deploy_fp_emit_files "$context" |
     sort -z |
     while IFS= read -r -d '' file; do
+      [[ -f "$file" ]] || continue
       rel="${file#${context}/}"
-      mode="$(_deploy_fp_stat_mode "$file")"
-      size="$(_deploy_fp_stat_size "$file")"
-      mtime="$(_deploy_fp_stat_mtime "$file")"
-      hash="$(_deploy_fp_sha256_file "$file")"
-      printf '%s\0%s\0%s\0%s\0' "$rel" "$mode" "$size" "$hash"
-      printf '%s|%s\n' "$mtime" "$rel" >&3
-    done 3>"$mtime_file" |
+      mode="$(_deploy_fp_stat_mode "$file" 2>/dev/null)" || continue
+      mtime="$(_deploy_fp_stat_mtime "$file" 2>/dev/null)" || continue
+      printf '%s\n' "$file" >> "$abs_file"
+      printf '%s\n' "$rel" >> "$rel_file"
+      printf '%s\n' "$mode" >> "$mode_file"
+      printf '%s|%s\n' "$mtime" "$rel" >> "$mtime_file"
+    done
+
+  if [[ -s "$abs_file" ]]; then
+    if ! git hash-object --stdin-paths < "$abs_file" > "$hash_file" 2>/dev/null; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    checksum="$(paste "$rel_file" "$mode_file" "$hash_file" |
+      while IFS=$'\t' read -r rel mode hash; do
+        [[ -n "$rel" && -n "$hash" ]] || continue
+        printf '%s\0%s\0%s\0' "$rel" "$mode" "$hash"
+      done |
+      _deploy_fp_sha256_pipe)"
+  else
+    checksum="$(printf '' |
     _deploy_fp_sha256_pipe)"
+  fi
 
   if [[ -f "$mtime_file" ]]; then
     DEPLOY_FP_FILE_COUNT="$(wc -l < "$mtime_file" | tr -d ' ')"
@@ -197,9 +218,9 @@ deploy_fingerprint_image_checksum() {
       DEPLOY_FP_LATEST_MTIME="${latest%%|*}"
       DEPLOY_FP_LATEST_FILE="${latest#*|}"
     fi
-    rm -f "$mtime_file"
   fi
 
+  rm -rf "$tmp_dir"
   DEPLOY_FP_CHECKSUM="$checksum"
   printf '%s\n' "$checksum"
 }

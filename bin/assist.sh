@@ -65,24 +65,17 @@ _k8_check_assist() {
   fi
 
   local prompt
-  prompt="$(cat <<PROMPT
-You are a concise devops assistant helping a user with the \`${tool_name}\` CLI tool.
-This tool is part of a Kubernetes/Helm/Docker devops toolchain installed at ~/.local/bin.
-${infra_context}
-
-## Tool Documentation
-\`\`\`
-${help_text}
-\`\`\`
-
-## User's Question
-${K8_ASSIST_QUERY}
-
-Answer concisely. If the question is about how to accomplish a specific task,
-show the exact command. If vague, explain what the tool does and show common
-usage patterns. Keep output under 40 lines unless detail is needed.
-PROMPT
-)"
+  prompt="$(
+    printf 'You are a concise devops assistant helping a user with the %s CLI tool.\n' "$tool_name"
+    printf 'This tool is part of a Kubernetes/Helm/Docker devops toolchain installed at ~/.local/bin.\n'
+    printf '%s\n\n' "$infra_context"
+    printf '## Tool Documentation\n'
+    printf '```\n%s\n```\n\n' "$help_text"
+    printf '## User Question\n%s\n\n' "$K8_ASSIST_QUERY"
+    printf 'Answer concisely. If the question is about how to accomplish a specific task,\n'
+    printf 'show the exact command. If vague, explain what the tool does and show common\n'
+    printf 'usage patterns. Keep output under 40 lines unless detail is needed.\n'
+  )"
 
   claude -p --bare --model sonnet "$prompt"
   exit 0
